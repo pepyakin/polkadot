@@ -35,7 +35,7 @@ extern crate substrate_state_machine as state_machine;
 extern crate ed25519;
 
 extern crate serde;
-extern crate parity_wasm;
+extern crate wasmi;
 extern crate byteorder;
 extern crate rustc_hex;
 extern crate triehash;
