@@ -16,18 +16,18 @@
 
 //! Rust implementation of Substrate contracts.
 
-use std::sync::Arc;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 // use parity_wasm::{deserialize_buffer, ModuleInstanceInterface, ProgramInstance};
 // use parity_wasm::interpreter::{ItemIndex, DummyUserError};
 // use parity_wasm::RuntimeValue::{I32, I64};
-use wasmi::{Module, ModuleInstance, RuntimeValue, MemoryInstance, Trap, TrapKind};
+use wasmi::{Module, ModuleInstance,  MemoryInstance, MemoryRef, Trap, TrapKind, ImportsBuilder};
+use wasmi::RuntimeValue::{I32, I64};
 use state_machine::{Externalities, CodeExecutor};
 use error::{Error, ErrorKind, Result};
 // use wasm_utils::{DummyUserError, MemoryInstance, UserDefinedElements,
 // 	AddModuleWithoutFullDependentInstance};
-use wasm_utils::{DummyUserError, ConvertibleToWasm};
+use wasm_utils::{DummyUserError};
 use primitives::{blake2_256, twox_128, twox_256};
 use primitives::hexdisplay::HexDisplay;
 use triehash::ordered_trie_root;
@@ -53,16 +53,16 @@ impl Heap {
 
 struct FunctionExecutor<'e, E: Externalities + 'e> {
 	heap: Heap,
-	memory: Arc<MemoryInstance>,
+	memory: MemoryRef,
 	ext: &'e mut E,
 	hash_lookup: HashMap<Vec<u8>, Vec<u8>>,
 }
 
 impl<'e, E: Externalities> FunctionExecutor<'e, E> {
-	fn new(m: &Arc<MemoryInstance>, e: &'e mut E) -> Self {
+	fn new(m: MemoryRef, e: &'e mut E) -> Self {
 		FunctionExecutor {
 			heap: Heap::new(),
-			memory: Arc::clone(m),
+			memory: m,
 			ext: e,
 			hash_lookup: HashMap::new(),
 		}
@@ -327,41 +327,36 @@ impl CodeExecutor for WasmExecutor {
 		data: &[u8],
 	) -> Result<Vec<u8>> {
 		// TODO: handle all expects as errors to be returned.
-		// println!("Wasm-Calling {}({})", method, HexDisplay::from(&data));
+		println!("Wasm-Calling {}({})", method, HexDisplay::from(&data));
 
-		// let program = ProgramInstance::new().expect("this really shouldn't be able to fail; qed");
+		let module = Module::from_buffer(code).expect("all modules compiled with rustc are valid wasm code; qed");
+		let instance = ModuleInstance::new(
+			&module,
+			&ImportsBuilder::new()
+				.with_resolver("env", FunctionExecutor::<E>::resolver())
+		)?;
 
-		// let module = deserialize_buffer(code.to_vec()).expect("all modules compiled with rustc are valid wasm code; qed");
-		// let module = program.add_module_by_sigs("test", module, map!["env" => FunctionExecutor::<E>::SIGNATURES]).expect("runtime signatures always provided; qed");
+		// TODO:
+		let memory = instance.not_started_instance().export_by_name("memory").unwrap().as_memory().unwrap().clone();
+		let mut fec = FunctionExecutor::new(memory.clone(), ext);
 
-		// let memory = module.memory(ItemIndex::Internal(0)).expect("all modules compiled with rustc include memory segments; qed");
-		// let mut fec = FunctionExecutor::new(&memory, ext);
+		let instance = instance.run_start(&mut fec)?;
 
-		// let size = data.len() as u32;
-		// let offset = fec.heap.allocate(size);
-		// memory.set(offset, &data).expect("heap always gives a sensible offset to write");
+		let size = data.len() as u32;
+		let offset = fec.heap.allocate(size);
+		memory.set(offset, &data).expect("heap always gives a sensible offset to write");
 
-		// let returned = program
-		// 		.params_with_external("env", &mut fec)
-		// 		.map(|p| p
-		// 			.add_argument(I32(offset as i32))
-		// 			.add_argument(I32(size as i32)))
-		// 	.and_then(|p| module.execute_export(method, p))
-		// 	.map_err(|_| -> Error {
-		// 		ErrorKind::Runtime.into()
-		// 	})?;
+		let returned = instance.invoke_export(method, &[I32(offset as i32), I32(size as i32)], &mut fec)?;
 
-		// if let Some(I64(r)) = returned {
-		// 	let offset = r as u32;
-		// 	let length = (r >> 32) as u32 as usize;
-		// 	memory.get(offset, length)
-		// 		.map_err(|_| ErrorKind::Runtime.into())
-		// 		.map(|v| { println!("Returned {}", HexDisplay::from(&v)); v })
-		// } else {
-		// 	Err(ErrorKind::InvalidReturn.into())
-		// }
-
-		Err(ErrorKind::InvalidReturn.into())
+		if let Some(I64(r)) = returned {
+			let offset = r as u32;
+			let length = (r >> 32) as u32 as usize;
+			memory.get(offset, length)
+				.map_err(|_| ErrorKind::Runtime.into())
+				.map(|v| { println!("Returned {}", HexDisplay::from(&v)); v })
+		} else {
+			Err(ErrorKind::InvalidReturn.into())
+		}
 	}
 }
 
@@ -371,6 +366,13 @@ mod tests {
 	use rustc_hex::FromHex;
 	use codec::Slicable;
 	use state_machine::TestExternalities;
+
+	// TODO: move into own crate.
+	macro_rules! map {
+		($( $name:expr => $value:expr ),*) => (
+			vec![ $( ( $name, $value ) ),* ].into_iter().collect()
+		)
+	}
 
 	#[test]
 	fn returning_should_work() {

@@ -47,12 +47,6 @@ extern crate error_chain;
 #[cfg(test)]
 extern crate assert_matches;
 
-// TODO: move into own crate
-macro_rules! map {
-	($( $name:expr => $value:expr ),*) => (
-		vec![ $( ( $name, $value ) ),* ].into_iter().collect()
-	)
-}
 
 #[macro_use]
 mod wasm_utils;
