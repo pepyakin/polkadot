@@ -86,8 +86,9 @@ macro_rules! resolve_fn {
 		if $name_var == stringify!($name) {
 			let signature = gen_signature!( ( $( $params ),* ) $( -> $returns )* );
 			if $sig_var != &signature {
-				// TODO: Return result
-				panic!()
+				return Err($crate::wasmi::Error::Instantiation(
+					format!("Export {} has different signature {:?}", $name_var, $sig_var),
+				));
 			}
 			return Ok($crate::wasmi::FuncInstance::alloc_host(signature, $index));
 		}
@@ -168,8 +169,9 @@ macro_rules! impl_function_executor {
 					fn resolve_func(&self, name: &str, signature: &$crate::wasmi::Signature) -> ::std::result::Result<$crate::wasmi::FuncRef, $crate::wasmi::Error> {
 						resolve_fn!(signature, name, $( $name( $( $params ),* ) $( -> $returns )* => )*);
 
-						// TODO: Don't panic, return `Err`.
-						panic!("func with name {} not found", name);
+						Err($crate::wasmi::Error::Instantiation(
+							format!("Export {} not found", name),
+						))
 					}
 				}
 				&Resolver
