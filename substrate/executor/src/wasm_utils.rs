@@ -145,37 +145,38 @@ impl<T> ConvertibleToWasm for *mut T { type NativeType = u32; const VALUE_TYPE: 
 // 	);
 // }
 
-macro_rules! resolve_fn {
-    (@iter $index:expr, $name_var:ident,) => ();
-    (@iter $index:expr, $name_var:ident, $name:ident $($names:ident)*) => (
-        if $name_var == stringify!($name) {
-			// TODO: signature
-			return Ok($crate::wasmi::FuncInstance::alloc_host($crate::wasmi::Signature::new(&[][..], None), $index));
-        }
-        resolve_fn!(@iter $index + 1, $name_var, $($names)*)
-    );
-    ($name_var:ident, $($names:ident),*) => (
-        resolve_fn!(@iter 0, $name_var, $($names)*);
-    );
-}
-
 #[macro_export]
 macro_rules! convert_args {
     () => ([]);
     ( $( $t:ty ),* ) => ( [ $( { use $crate::wasm_utils::ConvertibleToWasm; <$t>::VALUE_TYPE }, )* ] );
 }
 
+// #[macro_export]
+// macro_rules! signature_equals {
+//     ( $signature:ident, ( $( $params: ty ),* ) ) => (
+//         {
+//             $signature.params() == &convert_args!($($params),*) && $signature.return_type() == None
+//         }
+//     );
+
+//     ( $signature:ident, ( $( $params: ty ),* ) -> $returns: ty ) => (
+//         {
+//             $signature.params() == &convert_args!($($params),*) && $signature.return_type() == Some({ use $crate::wasm_utils::ConvertibleToWasm; <$returns>::VALUE_TYPE })
+//         }
+//     );
+// }
+
 #[macro_export]
-macro_rules! signature_equals {
-    ( $signature:ident, ( $( $params: ty ),* ) ) => (
+macro_rules! gen_signature {
+    ( ( $( $params: ty ),* ) ) => (
         {
-            $signature.params() == &convert_args!($($params),*) && $signature.return_type() == None
+			$crate::wasmi::Signature::new(&convert_args!($($params),*)[..], None)
         }
     );
 
-    ( $signature:ident, ( $( $params: ty ),* ) -> $returns: ty ) => (
+    ( ( $( $params: ty ),* ) -> $returns: ty ) => (
         {
-            $signature.params() == &convert_args!($($params),*) && $signature.return_type() == Some({ use $crate::wasm_utils::ConvertibleToWasm; <$returns>::VALUE_TYPE })
+			$crate::wasmi::Signature::new(&convert_args!($($params),*)[..], Some({ use $crate::wasm_utils::ConvertibleToWasm; <$returns>::VALUE_TYPE }))
         }
     );
 }
@@ -198,6 +199,37 @@ macro_rules! check_signature {
     );
 }
 
+macro_rules! resolve_fn {
+    // (@iter $index:expr, $name_var:ident,) => ();
+    // (@iter $index:expr, $name_var:ident, $name:ident $($names:ident)*) => (
+    //     if $name_var == stringify!($name) {
+	// 		// TODO: signature
+	// 		return Ok($crate::wasmi::FuncInstance::alloc_host($crate::wasmi::Signature::new(&[][..], None), $index));
+    //     }
+    //     resolve_fn!(@iter $index + 1, $name_var, $($names)*)
+    // );
+    // ($name_var:ident, $($names:ident),*) => (
+    //     resolve_fn!(@iter 0, $name_var, $($names)*);
+    // );
+
+	(@iter $index:expr, $sig_var:ident, $name_var:ident) => ();
+    (@iter $index:expr, $sig_var:ident, $name_var:ident $name:ident ( $( $params:ty ),* ) $( -> $returns:ty )* => $($tail:tt)* ) => (
+        if $name_var == stringify!($name) {
+			let signature = gen_signature!( ( $( $params ),* ) $( -> $returns )* );
+			if $sig_var != &signature {
+				// TODO: Return result
+				panic!()
+			}
+			return Ok($crate::wasmi::FuncInstance::alloc_host(signature, $index));
+        }
+        resolve_fn!(@iter $index + 1, $sig_var, $name_var $($tail)*)
+    );
+
+	($sig_var:ident, $name_var:ident, $($tail:tt)* ) => (
+        resolve_fn!(@iter 0, $sig_var, $name_var $($tail)*);
+    );
+}
+
 #[macro_export]
 macro_rules! unmarshall_args {
     ( $body:tt, $objectname:ident, $args_iter:ident, $args_index:ident, $( $names:ident : $params:ty ),*) => ({
@@ -213,6 +245,7 @@ macro_rules! unmarshall_args {
     })
 }
 
+#[inline(always)]
 pub fn constrain_closure<R, F: FnOnce() -> Result<R, ::wasmi::Trap>>(f: F) -> F {
     f
 }
@@ -220,12 +253,12 @@ pub fn constrain_closure<R, F: FnOnce() -> Result<R, ::wasmi::Trap>>(f: F) -> F 
 #[macro_export]
 macro_rules! marshall {
     ( $args_iter:ident, $args_index:ident, $objectname:ident, ( $( $names:ident : $params:ty ),* ) -> $returns:ty => $body:tt ) => ({
-        let mut body = $crate::wasm_utils::constrain_closure::<<$returns as $crate::wasm_utils::ConvertibleToWasm>::NativeType, _>(|| { unmarshall_args!($body, $objectname, $args_iter, $args_index, $( $names : $params ),*) });
+        let body = $crate::wasm_utils::constrain_closure::<<$returns as $crate::wasm_utils::ConvertibleToWasm>::NativeType, _>(|| { unmarshall_args!($body, $objectname, $args_iter, $args_index, $( $names : $params ),*) });
         let r = body()?;
         return Ok(Some({ use $crate::wasm_utils::ConvertibleToWasm; r.to_runtime_value() }))
     });
     ( $args_iter:ident, $args_index:ident, $objectname:ident, ( $( $names:ident : $params:ty ),* ) => $body:tt ) => ({
-        let mut body = $crate::wasm_utils::constrain_closure::<(), _>(|| { unmarshall_args!($body, $objectname, $args_iter, $args_index, $( $names : $params ),*) });
+        let body = $crate::wasm_utils::constrain_closure::<(), _>(|| { unmarshall_args!($body, $objectname, $args_iter, $args_index, $( $names : $params ),*) });
 		body()?;
         return Ok(None)
     })
@@ -259,11 +292,12 @@ macro_rules! impl_function_executor {
       },
       => $($pre:tt)+ ) => (
         impl $( $pre ) + $structname {
+			#[allow(unused)]
             fn resolver() -> &'static $crate::wasmi::ModuleImportResolver {
                 struct Resolver;
                 impl $crate::wasmi::ModuleImportResolver for Resolver {
-                    fn resolve_func(&self, name: &str, _signature: &$crate::wasmi::Signature) -> ::std::result::Result<$crate::wasmi::FuncRef, $crate::wasmi::Error> {
-                        resolve_fn!(name, $( $name ),*);
+                    fn resolve_func(&self, name: &str, signature: &$crate::wasmi::Signature) -> ::std::result::Result<$crate::wasmi::FuncRef, $crate::wasmi::Error> {
+                        resolve_fn!(signature, name, $( $name( $( $params ),* ) $( -> $returns )* => )*);
 
 						// TODO: Don't panic, return `Err`.
                         panic!("func with name {} not found", name);
