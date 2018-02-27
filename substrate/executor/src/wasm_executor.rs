@@ -18,15 +18,10 @@
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
-// use parity_wasm::{deserialize_buffer, ModuleInstanceInterface, ProgramInstance};
-// use parity_wasm::interpreter::{ItemIndex, DummyUserError};
-// use parity_wasm::RuntimeValue::{I32, I64};
 use wasmi::{Module, ModuleInstance,  MemoryInstance, MemoryRef, Trap, TrapKind, ImportsBuilder};
 use wasmi::RuntimeValue::{I32, I64};
 use state_machine::{Externalities, CodeExecutor};
 use error::{Error, ErrorKind, Result};
-// use wasm_utils::{DummyUserError, MemoryInstance, UserDefinedElements,
-// 	AddModuleWithoutFullDependentInstance};
 use wasm_utils::{DummyUserError};
 use primitives::{blake2_256, twox_128, twox_256};
 use primitives::hexdisplay::HexDisplay;
