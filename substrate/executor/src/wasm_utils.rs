@@ -313,9 +313,9 @@ macro_rules! impl_function_executor {
                 index: usize,
                 args: $crate::wasmi::RuntimeArgs,
             ) -> ::std::result::Result<Option<$crate::wasmi::RuntimeValue>, $crate::wasmi::Trap> {
-                let mut $objectname = self;
+                let $objectname = self;
 				let mut args_index = 0;
-                let mut args = args;
+                let args = args;
                 dispatch_fn!(index, $objectname, args, args_index, $( $name( $( $names : $params ),* ) $( -> $returns )* => $body ),*);
             }
         }
