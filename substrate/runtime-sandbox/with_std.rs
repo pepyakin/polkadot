@@ -18,40 +18,15 @@ extern crate wasmi;
 extern crate substrate_executor;
 
 
-use substrate_executor::wasm_utils;
 use std::collections::HashMap;
-use std::mem;
-use std::cell::RefCell;
-
-use wasmi::TryInto;
 
 use wasmi::{
-	Externals, Module, ModuleInstance, ModuleRef, ModuleImportResolver, MemoryInstance,
-	MemoryRef, Trap, TrapKind, ImportsBuilder, RuntimeArgs, RuntimeValue, Signature,
+	Externals, Module, ModuleInstance, ModuleRef, MemoryInstance,
+	MemoryRef, Trap, RuntimeArgs, RuntimeValue, Signature,
 	GlobalDescriptor, MemoryDescriptor, TableDescriptor, TableRef, FuncRef, GlobalRef,
 	ImportResolver, FuncInstance,
 };
 use wasmi::memory_units::{Pages};
-
-#[derive(Debug)]
-pub enum Error {
-	Trap,
-}
-
-enum Void {}
-
-#[derive(Debug)]
-pub enum Value {
-	I32(i32),
-}
-
-impl Value {
-	pub fn as_i32(&self) -> i32 {
-		match *self {
-			Value::I32(v) => v,
-		}
-	}
-}
 
 pub struct SandboxInstance {
 	instance: ModuleRef,
@@ -69,17 +44,12 @@ impl SandboxInstance {
 	}
 }
 
-enum TypedFuncPtr {
-	Func0(fn()),
-}
-
 pub struct Sandbox<'a> {
 	// TODO: Refactor
 	wrappers: Vec<&'a Fn(&[Value])>,
 	registered_funcs: HashMap<(String, String), usize>,
 	memories: Vec<Memory>,
 	registered_memories: HashMap<(String, String), usize>,
-	memory: RefCell<Option<MemoryRef>>,
 }
 
 impl<'a> Externals for Sandbox<'a> {
@@ -170,62 +140,8 @@ impl<'a> Sandbox<'a> {
 			memories: Vec::new(),
 			registered_funcs: HashMap::new(),
 			registered_memories: HashMap::new(),
-			memory: RefCell::new(None),
 		}
 	}
-
-	// pub fn register_func0<R: wasm_utils::ConvertibleToWasm>(&mut self, module_name: &str, field_name: &str, f: fn() -> R) {
-	// 	fn wrapper<R: wasm_utils::ConvertibleToWasm>(
-	// 		f_raw: *const u8,
-	// 		args: RuntimeArgs
-	// 	) -> Result<Option<RuntimeValue>, Trap> {
-	// 		use wasm_utils::ConvertibleToWasm;
-	// 		unsafe {
-	// 			let f = mem::transmute::<_, fn() -> R>(f_raw);
-	// 			let result = f();
-	// 			Ok(Some(result.to_runtime_value()))
-	// 		}
-	// 	}
-
-	// 	let f_raw = unsafe {
-	// 		mem::transmute::<_, *const u8>(f)
-	// 	};
-	// 	self.wrappers.push(WrappedFn {
-	// 		wrapper: wrapper::<R>,
-	// 		func: f_raw,
-	// 	});
-	// 	let f_idx = self.wrappers.len() - 1;
-
-	// 	self.registered_funcs.insert((module_name.to_string(), field_name.to_string()), f_idx);
-	// }
-
-	// pub fn register_proc3(&mut self, module_name: &str, field_name: &str, f: fn(u32, u32, u32)) {
-	// 	fn wrapper(
-	// 		f_raw: *const u8,
-	// 		args: RuntimeArgs
-	// 	) -> Result<Option<RuntimeValue>, Trap>
-	// 	{
-	// 		let p1: u32 = args.as_ref()[0].try_into().unwrap();
-	// 		let p2: u32 = args.as_ref()[1].try_into().unwrap();
-	// 		let p3: u32 = args.as_ref()[2].try_into().unwrap();
-	// 		unsafe {
-	// 			let f = mem::transmute::<_, fn(u32, u32, u32)>(f_raw);
-	// 			f(p1, p2, p3);
-	// 			Ok(None)
-	// 		}
-	// 	}
-
-	// 	let f_raw = unsafe {
-	// 		mem::transmute::<_, *const u8>(f)
-	// 	};
-	// 	self.wrappers.push(WrappedFn {
-	// 		wrapper: wrapper,
-	// 		func: f_raw,
-	// 	});
-	// 	let f_idx = self.wrappers.len() - 1;
-
-	// 	self.registered_funcs.insert((module_name.to_string(), field_name.to_string()), f_idx);
-	// }
 
 	pub fn register_closure<F: Fn(&[Value])>(&mut self, module_name: &str, field_name: &str, f: &'a F) {
 		self.wrappers.push(f);
@@ -240,6 +156,7 @@ impl<'a> Sandbox<'a> {
 		self.registered_memories.insert((module_name.to_string(), field_name.to_string()), mem_idx);
 	}
 
+	// TODO: Return `Result`
 	pub fn instantiate(&mut self, wasm: &[u8]) -> SandboxInstance {
 		let module = Module::from_buffer(wasm).unwrap();
 		let instance = ModuleInstance::new(

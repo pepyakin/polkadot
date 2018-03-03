@@ -26,3 +26,21 @@ include!("../with_std.rs");
 
 #[cfg(not(feature = "std"))]
 include!("../without_std.rs");
+
+#[derive(Debug)]
+pub enum Error {
+	Trap,
+}
+
+#[derive(Debug)]
+pub enum Value {
+	I32(i32),
+}
+
+impl Value {
+	pub fn as_i32(&self) -> i32 {
+		match *self {
+			Value::I32(v) => v,
+		}
+	}
+}
