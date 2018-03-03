@@ -1,0 +1,19 @@
+[package]
+name = "substrate-runtime-sandbox"
+version = "0.1.0"
+authors = ["Parity Technologies <admin@parity.io>"]
+build = "build.rs"
+
+[build-dependencies]
+rustc_version = "0.2"
+
+[dependencies]
+wasmi = { path = "/Users/pepyakin/dev/parity/wasmi" }
+substrate-executor = { path = "../executor" }
+
+[features]
+default = ["std"]
+std = [
+]
+nightly = []
+strict = []

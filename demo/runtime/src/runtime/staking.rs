@@ -24,6 +24,7 @@ use codec::KeyedVec;
 use runtime_support::{storage, StorageVec};
 use demo_primitives::{BlockNumber, AccountId};
 use runtime::{system, session, governance};
+use runtime_sandbox as sandbox;
 
 /// The balance of an account.
 pub type Balance = u64;
@@ -240,6 +241,8 @@ pub mod public {
 		}
 	}
 
+	environmental!(ext: trait Externalities);
+
 	fn effect_transfer<E: Externalities>(
 		transactor: &AccountId,
 		dest: &AccountId,
@@ -265,9 +268,14 @@ pub mod public {
 			local.insert(dest.clone(), (Some(to_balance + value), None, Default::default()));
 		}
 
+		let dest_code = ext.get_code(dest);
+		if dest_code.is_empty() {
+			return Some(local.into_inner());
+		}
+
 		let should_commit = {
 			// Our local ext: Should be used for any transfers and creates that happen internally.
-			let ext = || Ext {
+			let mut ext = || Ext {
 				do_get_storage: |account: &AccountId, location: &[u8]|
 					local.borrow().get(account)
 						.and_then(|a| a.2.get(location))
@@ -299,10 +307,42 @@ pub mod public {
 					.2.insert(location, value);
 			};
 
-			// TODO: logging (logs are just appended into a notable storage-based vector and cleared every
-			// block).
-			// TODO: execute code with ext(), put_storage, create and transfer as externalities.
-			true
+			// TODO: Inspect the binary to extract the initial pages number.
+			let memory: RefCell<sandbox::Memory> = RefCell::new(sandbox::Memory::new(1, None));
+
+			let ext_put_storage = |args: &[sandbox::Value]| {
+				let location_ptr = args[0].as_i32() as u32;
+				let value_non_null = args[1].as_i32() as u32;
+				let value_ptr = args[2].as_i32() as u32;
+
+				let mut location = [0; 32];
+				memory.borrow().get(location_ptr, &mut location);
+
+				if value_non_null != 0 {
+					let mut value = [0; 32];
+					memory.borrow().get(value_ptr, &mut value);
+					put_storage(location.to_vec(), Some(value.to_vec()));
+				} else {
+					put_storage(location.to_vec(), None);
+				}
+			};
+
+			let ext_get_storage = |args: &[sandbox::Value]| {
+				let location_ptr = args[0].as_i32() as u32;
+
+				let mut location = [0; 32];
+				memory.borrow().get(location_ptr, &mut location);
+				ext().get_storage(&dest.clone(), &location);
+			};
+
+			let mut sandbox = sandbox::Sandbox::new();
+			sandbox.register_closure("env", "ext_put_storage", &ext_put_storage);
+			sandbox.register_closure("env", "ext_get_storage", &ext_get_storage);
+			sandbox.register_memory("env", "memory", memory.borrow().clone());
+
+			let instance = sandbox.instantiate(&dest_code);
+
+			instance.invoke(&mut sandbox, "call").is_ok()
 		};
 
 		if should_commit {
@@ -608,6 +648,21 @@ mod tests {
 		with_externalities(&mut t, || {
 			stake(&one);
 			transfer(&one, &two, 69);
+		});
+	}
+
+	#[test]
+	fn transfer_to_contract() {
+		let one = Keyring::One.to_raw_public();
+		let two = Keyring::Two.to_raw_public();
+
+		let mut t: TestExternalities = map![
+			twox_128(&one.to_keyed_vec(BALANCE_OF)).to_vec() => vec![].and(&111u64),
+			twox_128(&two.to_keyed_vec(CODE_OF)).to_vec() => include_bytes!("/Users/pepyakin/dev/parity/temp/polkadot-demo-initial-contracts/put_storage.wasm").to_vec()
+		];
+
+		with_externalities(&mut t, || {
+			transfer(&one, &two, 1);
 		});
 	}
 }

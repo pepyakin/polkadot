@@ -11,7 +11,9 @@ substrate-codec = { path = "../../substrate/codec" }
 substrate-runtime-std = { path = "../../substrate/runtime-std" }
 substrate-runtime-io = { path = "../../substrate/runtime-io" }
 substrate-runtime-support = { path = "../../substrate/runtime-support" }
+substrate-runtime-sandbox = { path = "../../substrate/runtime-sandbox" }
 substrate-primitives = { path = "../../substrate/primitives" }
+environmental = { path = "../../substrate/environmental" }
 demo-primitives = { path = "../primitives" }
 integer-sqrt = "0.1.0"
 

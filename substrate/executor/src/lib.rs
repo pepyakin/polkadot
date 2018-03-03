@@ -48,8 +48,9 @@ extern crate error_chain;
 extern crate assert_matches;
 
 
+// TODO: Review this.
 #[macro_use]
-mod wasm_utils;
+pub mod wasm_utils;
 mod wasm_executor;
 #[macro_use]
 mod native_executor;

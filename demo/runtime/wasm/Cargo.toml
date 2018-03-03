@@ -11,9 +11,12 @@ substrate-codec = { path = "../../../substrate/codec", default-features = false 
 substrate-runtime-std = { path = "../../../substrate/runtime-std", default-features = false }
 substrate-runtime-io = { path = "../../../substrate/runtime-io", default-features = false }
 substrate-runtime-support = { path = "../../../substrate/runtime-support", default-features = false }
+substrate-runtime-sandbox = { path = "../../../substrate/runtime-sandbox", default-features = false }
 substrate-primitives = { path = "../../../substrate/primitives", default-features = false }
 demo-primitives = { path = "../../primitives", default-features = false }
+# integer-sqrt = "0.1.0"
 integer-sqrt = { path = "/Users/pepyakin/dev/etc/integer-sqrt-rs" }
+
 
 [features]
 default = []

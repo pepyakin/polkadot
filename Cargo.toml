@@ -33,6 +33,7 @@ members = [
 	"substrate/rpc-servers",
 	"substrate/rpc",
 	"substrate/runtime-io",
+	"substrate/runtime-sandbox",
 	"substrate/runtime-std",
 	"substrate/runtime-support",
 	"substrate/serializer",
