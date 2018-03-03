@@ -27,12 +27,12 @@ include!("../with_std.rs");
 #[cfg(not(feature = "std"))]
 include!("../without_std.rs");
 
-#[derive(Debug)]
+#[cfg_attr(feature = "std", derive(Debug))]
 pub enum Error {
 	Trap,
 }
 
-#[derive(Debug)]
+#[cfg_attr(feature = "std", derive(Debug))]
 pub enum Value {
 	I32(i32),
 }

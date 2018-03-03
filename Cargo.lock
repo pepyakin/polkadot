@@ -262,7 +262,6 @@ name = "demo-runtime"
 version = "0.1.0"
 dependencies = [
  "demo-primitives 0.1.0",
- "environmental 0.1.0",
  "hex-literal 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "integer-sqrt 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1688,7 +1687,6 @@ name = "substrate-runtime-sandbox"
 version = "0.1.0"
 dependencies = [
  "rustc_version 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "substrate-executor 0.1.0",
  "wasmi 0.0.0",
 ]
 

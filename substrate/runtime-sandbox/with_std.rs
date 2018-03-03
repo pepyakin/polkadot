@@ -15,8 +15,6 @@
 // along with Substrate.  If not, see <http://www.gnu.org/licenses/>.
 
 extern crate wasmi;
-extern crate substrate_executor;
-
 
 use std::collections::HashMap;
 

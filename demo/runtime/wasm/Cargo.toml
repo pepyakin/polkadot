@@ -15,7 +15,7 @@ substrate-runtime-sandbox = { path = "../../../substrate/runtime-sandbox", defau
 substrate-primitives = { path = "../../../substrate/primitives", default-features = false }
 demo-primitives = { path = "../../primitives", default-features = false }
 # integer-sqrt = "0.1.0"
-integer-sqrt = { path = "/Users/pepyakin/dev/etc/integer-sqrt-rs" }
+integer-sqrt = { path = "/Users/pepyakin/dev/etc/integer-sqrt-rs", default-features = false }
 
 
 [features]

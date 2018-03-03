@@ -241,8 +241,6 @@ pub mod public {
 		}
 	}
 
-	environmental!(ext: trait Externalities);
-
 	fn effect_transfer<E: Externalities>(
 		transactor: &AccountId,
 		dest: &AccountId,

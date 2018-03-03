@@ -24,8 +24,6 @@ extern crate substrate_runtime_support as runtime_support;
 extern crate substrate_runtime_sandbox as runtime_sandbox;
 #[cfg(all(feature = "std", test))] extern crate substrate_keyring as keyring;
 
-#[macro_use] extern crate environmental;
-
 #[cfg(feature = "std")] extern crate rustc_hex;
 
 extern crate substrate_codec as codec;

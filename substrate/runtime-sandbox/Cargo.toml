@@ -8,12 +8,12 @@ build = "build.rs"
 rustc_version = "0.2"
 
 [dependencies]
-wasmi = { path = "/Users/pepyakin/dev/parity/wasmi" }
-substrate-executor = { path = "../executor" }
+wasmi = { path = "/Users/pepyakin/dev/parity/wasmi", optional = true }
 
 [features]
 default = ["std"]
 std = [
+	"wasmi"
 ]
 nightly = []
 strict = []
