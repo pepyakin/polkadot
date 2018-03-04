@@ -104,7 +104,6 @@ name = "demo-runtime"
 version = "0.1.0"
 dependencies = [
  "demo-primitives 0.1.0",
- "environmental 0.1.0",
  "integer-sqrt 0.1.0",
  "substrate-codec 0.1.0",
  "substrate-primitives 0.1.0",

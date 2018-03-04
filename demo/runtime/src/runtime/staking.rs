@@ -107,24 +107,20 @@ pub mod public {
 
 	type State = BTreeMap<AccountId, (Option<Balance>, Option<Vec<u8>>, BTreeMap<Vec<u8>, Option<Vec<u8>>>)>;
 
-	trait Externalities {
+	trait AccountDb {
 		fn get_storage(&self, account: &AccountId, location: &[u8]) -> Option<Vec<u8>>;
 		fn get_code(&self, account: &AccountId) -> Vec<u8>;
 		fn get_balance(&self, account: &AccountId) -> Balance;
+
+		fn set_storage(&self, account: &AccountId, location: Vec<u8>, value: Option<Vec<u8>>);
+		fn set_code(&self, account: &AccountId, code: Vec<u8>);
+		fn set_balance(&self, account: &AccountId, balance: Balance);
+
+		fn merge(&self, state: State);
 	}
 
-	struct Ext<F1, F3, F5> where
-		F1 : Fn(&AccountId, &[u8]) -> Option<Vec<u8>>,
-		F3 : Fn(&AccountId) -> Vec<u8>,
-		F5 : Fn(&AccountId) -> Balance
-	{
-		do_get_storage: F1,
-		do_get_code: F3,
-		do_get_balance: F5,
-	}
-
-	struct DirectExt;
-	impl Externalities for DirectExt {
+	struct DirectAccountDb;
+	impl AccountDb for DirectAccountDb {
 		fn get_storage(&self, account: &AccountId, location: &[u8]) -> Option<Vec<u8>> {
 			let mut v = account.to_keyed_vec(STORAGE_OF);
 			v.extend(location);
@@ -136,60 +132,112 @@ pub mod public {
 		fn get_balance(&self, account: &AccountId) -> Balance {
 			storage::get_or_default::<Balance>(&account.to_keyed_vec(BALANCE_OF))
 		}
+		fn set_storage(&self, account: &AccountId, location: Vec<u8>, value: Option<Vec<u8>>) {
+			let mut key = account.to_keyed_vec(STORAGE_OF);
+			key.extend(location);
+			if let Some(value) = value {
+				storage::put_raw(&key, &value);
+			} else {
+				storage::kill(&key);
+			}
+		}
+		fn set_code(&self, account: &AccountId, code: Vec<u8>) {
+			storage::put(&account.to_keyed_vec(CODE_OF), &code);
+		}
+		fn set_balance(&self, account: &AccountId, balance: Balance) {
+			storage::put(&account.to_keyed_vec(BALANCE_OF), &balance);
+		}
+		fn merge(&self, s: State) {
+			for (address, (maybe_balance, maybe_code, storage)) in s.into_iter() {
+				if let Some(balance) = maybe_balance {
+					storage::put(&address.to_keyed_vec(BALANCE_OF), &balance);
+				}
+				if let Some(code) = maybe_code {
+					storage::put(&address.to_keyed_vec(CODE_OF), &code);
+				}
+				let storage_key = address.to_keyed_vec(STORAGE_OF);
+				for (k, v) in storage.into_iter() {
+					let mut key = storage_key.clone();
+					key.extend(k);
+					if let Some(value) = v {
+						storage::put_raw(&key, &value);
+					} else {
+						storage::kill(&key);
+					}
+				}
+			}
+		}
 	}
 
-	impl<F1, F3, F5> Externalities for Ext<F1, F3, F5> where
-		F1 : Fn(&AccountId, &[u8]) -> Option<Vec<u8>>,
-		F3 : Fn(&AccountId) -> Vec<u8>,
-		F5 : Fn(&AccountId) -> Balance
-	{
+	struct OverlayAccountDb<'a> {
+		local: RefCell<State>,
+		ext: &'a AccountDb,
+	}
+	impl<'a> OverlayAccountDb<'a> {
+		fn new(ext: &'a AccountDb) -> OverlayAccountDb<'a> {
+			OverlayAccountDb {
+				local: RefCell::new(State::new()),
+				ext,
+			}
+		}
+
+		fn into_state(self) -> State {
+			self.local.into_inner()
+		}
+	}
+	impl<'a> AccountDb for OverlayAccountDb<'a> {
 		fn get_storage(&self, account: &AccountId, location: &[u8]) -> Option<Vec<u8>> {
-			(self.do_get_storage)(account, location)
+			self.local.borrow().get(account)
+				.and_then(|a| a.2.get(location))
+				.cloned()
+				.unwrap_or_else(|| self.ext.get_storage(account, location))
 		}
 		fn get_code(&self, account: &AccountId) -> Vec<u8> {
-			(self.do_get_code)(account)
+			self.local.borrow().get(account)
+				.and_then(|a| a.1.clone())
+				.unwrap_or_else(|| self.ext.get_code(account))
 		}
 		fn get_balance(&self, account: &AccountId) -> Balance {
-			(self.do_get_balance)(account)
+			self.local.borrow().get(account)
+				.and_then(|a| a.0)
+				.unwrap_or_else(|| self.ext.get_balance(account))
 		}
-	}
-
-	fn commit_state(s: State) {
-		for (address, (maybe_balance, maybe_code, storage)) in s.into_iter() {
-			if let Some(balance) = maybe_balance {
-				storage::put(&address.to_keyed_vec(BALANCE_OF), &balance);
-			}
-			if let Some(code) = maybe_code {
-				storage::put(&address.to_keyed_vec(CODE_OF), &code);
-			}
-			let storage_key = address.to_keyed_vec(STORAGE_OF);
-			for (k, v) in storage.into_iter() {
-				let mut key = storage_key.clone();
-				key.extend(k);
-				if let Some(value) = v {
-					storage::put_raw(&key, &value);
-				} else {
-					storage::kill(&key);
-				}
-			}
+		fn set_storage(&self, account: &AccountId, location: Vec<u8>, value: Option<Vec<u8>>) {
+			self.local.borrow_mut()
+				.entry(account.clone())
+				.or_insert((None, None, Default::default()))
+				.2.insert(location, value);
 		}
-	}
+		fn set_code(&self, account: &AccountId, code: Vec<u8>) {
+			self.local.borrow_mut()
+				.entry(account.clone())
+				.or_insert((None, None, Default::default()))
+				.1 = Some(code);
+		}
+		fn set_balance(&self, account: &AccountId, balance: Balance) {
+			self.local.borrow_mut()
+				.entry(account.clone())
+				.or_insert((None, None, Default::default()))
+				.0 = Some(balance);
+		}
+		fn merge(&self, s: State) {
+			let mut local = self.local.borrow_mut();
 
-	fn merge_state(commit_state: State, local: &mut State) {
-		for (address, (maybe_balance, maybe_code, storage)) in commit_state.into_iter() {
-			match local.entry(address) {
-				Entry::Occupied(e) => {
-					let mut value = e.into_mut();
-					if maybe_balance.is_some() {
-						value.0 = maybe_balance;
+			for (address, (maybe_balance, maybe_code, storage)) in s.into_iter() {
+				match local.entry(address) {
+					Entry::Occupied(e) => {
+						let mut value = e.into_mut();
+						if maybe_balance.is_some() {
+							value.0 = maybe_balance;
+						}
+						if maybe_code.is_some() {
+							value.1 = maybe_code;
+						}
+						value.2.extend(storage.into_iter());
 					}
-					if maybe_code.is_some() {
-						value.1 = maybe_code;
+					Entry::Vacant(e) => {
+						e.insert((maybe_balance, maybe_code, storage));
 					}
-					value.2.extend(storage.into_iter());
-				}
-				Entry::Vacant(e) => {
-					e.insert((maybe_balance, maybe_code, storage));
 				}
 			}
 		}
@@ -198,12 +246,12 @@ pub mod public {
 	/// Create a smart-contract account.
 	pub fn create(transactor: &AccountId, code: &[u8], value: Balance) {
 		// commit anything that made it this far to storage
-		if let Some(commit) = effect_create(transactor, code, value, DirectExt) {
-			commit_state(commit);
+		if let Some(commit) = effect_create(transactor, code, value, DirectAccountDb) {
+			DirectAccountDb.merge(commit);
 		}
 	}
 
-	fn effect_create<E: Externalities>(
+	fn effect_create<E: AccountDb>(
 		transactor: &AccountId,
 		code: &[u8],
 		value: Balance,
@@ -222,26 +270,27 @@ pub mod public {
 			return None;
 		}
 
-		let mut local = BTreeMap::new();
+		let mut overlay = OverlayAccountDb::new(&ext);
 
 		// two inserts are safe
 		assert!(&dest != transactor);
-		local.insert(dest, (Some(value), Some(code.to_vec()), Default::default()));
-		local.insert(transactor.clone(), (Some(from_balance - value), None, Default::default()));
+		overlay.set_balance(&dest, value);
+		overlay.set_code(&dest, code.to_vec());
+		overlay.set_balance(transactor, from_balance - value);
 
-		Some(local)
+		Some(overlay.into_state())
 	}
 
 	/// Transfer some unlocked staking balance to another staker.
 	/// TODO: probably want to state gas-limit and gas-price.
 	pub fn transfer(transactor: &AccountId, dest: &AccountId, value: Balance) {
 		// commit anything that made it this far to storage
-		if let Some(commit) = effect_transfer(transactor, dest, value, DirectExt) {
-			commit_state(commit);
+		if let Some(commit) = effect_transfer(transactor, dest, value, DirectAccountDb) {
+			DirectAccountDb.merge(commit);
 		}
 	}
 
-	fn effect_transfer<E: Externalities>(
+	fn effect_transfer<E: AccountDb>(
 		transactor: &AccountId,
 		dest: &AccountId,
 		value: Balance,
@@ -258,96 +307,82 @@ pub mod public {
 		// TODO: consider storing upper-bound for contract's gas limit in fixed-length runtime
 		// code in contract itself and use that.
 
-		let local: RefCell<State> = RefCell::new(BTreeMap::new());
+		// Our local overlay: Should be used for any transfers and creates that happen internally.
+		let overlay = OverlayAccountDb::new(&ext);
 
 		if transactor != dest {
-			let mut local = local.borrow_mut();
-			local.insert(transactor.clone(), (Some(from_balance - value), None, Default::default()));
-			local.insert(dest.clone(), (Some(to_balance + value), None, Default::default()));
+			overlay.set_balance(transactor, from_balance - value);
+			overlay.set_balance(dest, to_balance + value);
 		}
 
 		let dest_code = ext.get_code(dest);
-		if dest_code.is_empty() {
-			return Some(local.into_inner());
-		}
-
-		let should_commit = {
-			// Our local ext: Should be used for any transfers and creates that happen internally.
-			let mut ext = || Ext {
-				do_get_storage: |account: &AccountId, location: &[u8]|
-					local.borrow().get(account)
-						.and_then(|a| a.2.get(location))
-						.cloned()
-						.unwrap_or_else(|| ext.get_storage(account, location)),
-				do_get_code: |account: &AccountId|
-					local.borrow().get(account)
-						.and_then(|a| a.1.clone())
-						.unwrap_or_else(|| ext.get_code(account)),
-				do_get_balance: |account: &AccountId|
-					local.borrow().get(account)
-						.and_then(|a| a.0)
-						.unwrap_or_else(|| ext.get_balance(account)),
-			};
-			let mut transfer = |inner_dest: &AccountId, value: Balance| {
-				if let Some(commit_state) = effect_transfer(dest, inner_dest, value, ext()) {
-					merge_state(commit_state, &mut *local.borrow_mut());
-				}
-			};
-			let mut create = |code: &[u8], value: Balance| {
-				if let Some(commit_state) = effect_create(dest, code, value, ext()) {
-					merge_state(commit_state, &mut *local.borrow_mut());
-				}
-			};
-			let mut put_storage = |location: Vec<u8>, value: Option<Vec<u8>>| {
-				local.borrow_mut()
-					.entry(dest.clone())
-					.or_insert((None, None, Default::default()))
-					.2.insert(location, value);
-			};
-
-			// TODO: Inspect the binary to extract the initial pages number.
-			let memory: RefCell<sandbox::Memory> = RefCell::new(sandbox::Memory::new(1, None));
-
-			let ext_put_storage = |args: &[sandbox::Value]| {
-				let location_ptr = args[0].as_i32() as u32;
-				let value_non_null = args[1].as_i32() as u32;
-				let value_ptr = args[2].as_i32() as u32;
-
-				let mut location = [0; 32];
-				memory.borrow().get(location_ptr, &mut location);
-
-				if value_non_null != 0 {
-					let mut value = [0; 32];
-					memory.borrow().get(value_ptr, &mut value);
-					put_storage(location.to_vec(), Some(value.to_vec()));
-				} else {
-					put_storage(location.to_vec(), None);
-				}
-			};
-
-			let ext_get_storage = |args: &[sandbox::Value]| {
-				let location_ptr = args[0].as_i32() as u32;
-
-				let mut location = [0; 32];
-				memory.borrow().get(location_ptr, &mut location);
-				ext().get_storage(&dest.clone(), &location);
-			};
-
-			let mut sandbox = sandbox::Sandbox::new();
-			sandbox.register_closure("env", "ext_put_storage", &ext_put_storage);
-			sandbox.register_closure("env", "ext_get_storage", &ext_get_storage);
-			sandbox.register_memory("env", "memory", memory.borrow().clone());
-
-			let instance = sandbox.instantiate(&dest_code);
-
-			instance.invoke(&mut sandbox, "call").is_ok()
+		let should_commit = if dest_code.is_empty() {
+			true
+		} else {
+			execute(&dest_code, dest, &overlay)
 		};
 
 		if should_commit {
-			Some(local.into_inner())
+			Some(overlay.into_state())
 		} else {
 			None
 		}
+	}
+
+	fn execute<E: AccountDb>(code: &[u8], account: &AccountId, account_db: &E) -> bool {
+		// TODO: Inspect the binary to extract the initial pages number.
+		let memory: RefCell<sandbox::Memory> = RefCell::new(sandbox::Memory::new(1, None));
+
+		let ext_transfer = |args: &[sandbox::Value]| {
+			let transfer_to_ptr = args[0].as_i32() as u32;
+			// TODO: This isn't a u32 but u64. But oh well...
+			let balance = args[1].as_i32() as u64;
+
+			let mut transfer_to = [0; 32];
+			memory.borrow().get(transfer_to_ptr, &mut transfer_to);
+
+			let overlay = OverlayAccountDb::new(account_db);
+			if let Some(commit_state) = effect_transfer(account, &transfer_to, balance, overlay) {
+				account_db.merge(commit_state);
+			}
+		};
+
+		let ext_put_storage = |args: &[sandbox::Value]| {
+			let location_ptr = args[0].as_i32() as u32;
+			let value_non_null = args[1].as_i32() as u32;
+			let value_ptr = args[2].as_i32() as u32;
+
+			let mut location = [0; 32];
+			memory.borrow().get(location_ptr, &mut location);
+
+			if value_non_null != 0 {
+				let mut value = [0; 32];
+				memory.borrow().get(value_ptr, &mut value);
+
+				account_db.set_storage(account, location.to_vec(), Some(value.to_vec()));
+			} else {
+				account_db.set_storage(account, location.to_vec(), None);
+			}
+		};
+
+		let ext_get_storage = |args: &[sandbox::Value]| {
+			let location_ptr = args[0].as_i32() as u32;
+
+			let mut location = [0; 32];
+			memory.borrow().get(location_ptr, &mut location);
+
+			account_db.get_storage(account, &location);
+		};
+
+		let mut sandbox = sandbox::Sandbox::new();
+		sandbox.register_closure("env", "ext_put_storage", &ext_put_storage);
+		sandbox.register_closure("env", "ext_get_storage", &ext_get_storage);
+		sandbox.register_closure("env", "ext_transfer", &ext_transfer);
+		sandbox.register_memory("env", "memory", memory.borrow().clone());
+
+		let instance = sandbox.instantiate(code);
+
+		instance.invoke(&mut sandbox, "call").is_ok()
 	}
 
 	/// Declare the desire to stake for the transactor.
