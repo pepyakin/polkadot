@@ -251,6 +251,14 @@ pub mod public {
 		}
 	}
 
+	/// Returns an address at which smart-contract created by `transactor` with the given `code`
+	/// should be placed after the creation.
+	pub(super) fn derive_contract_address(transactor: &AccountId, code: &[u8]) -> [u8; 32] {
+		let mut dest_pre = blake2_256(code).to_vec();
+		dest_pre.extend(&transactor[..]);
+		blake2_256(&dest_pre)
+	}
+
 	fn effect_create<E: AccountDb>(
 		transactor: &AccountId,
 		code: &[u8],
@@ -261,9 +269,7 @@ pub mod public {
 		// TODO: a fee.
 		assert!(from_balance >= value);
 
-		let mut dest_pre = blake2_256(code).to_vec();
-		dest_pre.extend(&transactor[..]);
-		let dest = blake2_256(&dest_pre);
+		let dest = derive_contract_address(transactor, code);
 
 		// early-out if degenerate.
 		if &dest == transactor {
@@ -377,6 +383,8 @@ pub mod public {
 		};
 
 		let ext_create = |args: &[sandbox::Value]| {
+			println!("ext_create({:?})", args);
+
 			// ext_create(code_ptr: u32, code_len: u32, value: u32)
 			let code_ptr = args[0].as_i32() as u32;
 			let code_len = args[1].as_i32() as u32;
@@ -387,6 +395,7 @@ pub mod public {
 
 			let overlay = OverlayAccountDb::new(account_db);
 			if let Some(commit_state) = effect_create(account, &code, value as u64, overlay) {
+				println!("commit_state={:?}", commit_state);
 				account_db.merge(commit_state);
 			}
 			// TODO: Trap?
@@ -399,7 +408,6 @@ pub mod public {
 		sandbox.register_closure("env", "ext_get_storage", &ext_get_storage);
 		sandbox.register_closure("env", "ext_transfer", &ext_transfer);
 		sandbox.register_closure("env", "ext_create", &ext_create);
-		// TODO: ext_crate
 		// TODO: ext_balance
 		// TODO: ext_address
 		// TODO: ext_callvalue
@@ -710,6 +718,9 @@ mod tests {
 		});
 	}
 
+	const CREATE_WASM: &[u8] = include_bytes!("/Users/pepyakin/dev/parity/temp/polkadot-demo-initial-contracts/create.wasm");
+	const TRANSFER_WASM: &[u8] = include_bytes!("/Users/pepyakin/dev/parity/temp/polkadot-demo-initial-contracts/transfer.wasm");
+
 	#[test]
 	fn contract_transfer() {
 		let one = Keyring::One.to_raw_public();
@@ -719,7 +730,7 @@ mod tests {
 		let mut t: TestExternalities = map![
 			twox_128(&one.to_keyed_vec(BALANCE_OF)).to_vec() => vec![].and(&111u64),
 			twox_128(&two.to_keyed_vec(BALANCE_OF)).to_vec() => vec![].and(&0u64),
-			twox_128(&two.to_keyed_vec(CODE_OF)).to_vec() => include_bytes!("/Users/pepyakin/dev/parity/temp/polkadot-demo-initial-contracts/transfer.wasm").to_vec(),
+			twox_128(&two.to_keyed_vec(CODE_OF)).to_vec() => TRANSFER_WASM.to_vec(),
 			twox_128(&three.to_keyed_vec(BALANCE_OF)).to_vec() => vec![].and(&30u64)
 		];
 
@@ -731,6 +742,28 @@ mod tests {
 			assert_eq!(balance(&one), 100);
 			assert_eq!(balance(&two), 5);
 			assert_eq!(balance(&three), 36);
+		});
+	}
+
+	#[test]
+	fn contract_create() {
+		let one = Keyring::One.to_raw_public();
+		let two = Keyring::Two.to_raw_public();
+		let created = derive_contract_address(&two, TRANSFER_WASM);
+
+		let mut t: TestExternalities = map![
+			twox_128(&one.to_keyed_vec(BALANCE_OF)).to_vec() => vec![].and(&111u64),
+			twox_128(&two.to_keyed_vec(BALANCE_OF)).to_vec() => vec![].and(&0u64),
+			twox_128(&two.to_keyed_vec(CODE_OF)).to_vec() => CREATE_WASM.to_vec()
+		];
+
+		with_externalities(&mut t, || {
+			// When invoked, contract at address `two` must create the 'transfer' contract.
+			transfer(&one, &two, 11);
+
+			assert_eq!(balance(&one), 100);
+			assert_eq!(balance(&two), 8);
+			assert_eq!(balance(&created), 3);
 		});
 	}
 }
