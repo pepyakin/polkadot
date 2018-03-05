@@ -383,19 +383,17 @@ pub mod public {
 		};
 
 		let ext_create = |args: &[sandbox::Value]| {
-			println!("ext_create({:?})", args);
-
 			// ext_create(code_ptr: u32, code_len: u32, value: u32)
 			let code_ptr = args[0].as_i32() as u32;
 			let code_len = args[1].as_i32() as u32;
 			let value = args[2].as_i32() as u32;
 
-			let mut code = vec![0u8; code_len as usize];
+			let mut code = Vec::new();
+			code.resize(code_len as usize, 0u8);
 			memory.borrow().get(code_ptr, &mut code);
 
 			let overlay = OverlayAccountDb::new(account_db);
 			if let Some(commit_state) = effect_create(account, &code, value as u64, overlay) {
-				println!("commit_state={:?}", commit_state);
 				account_db.merge(commit_state);
 			}
 			// TODO: Trap?
