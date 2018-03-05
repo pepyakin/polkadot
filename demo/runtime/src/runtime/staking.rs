@@ -330,22 +330,8 @@ pub mod public {
 	}
 
 	fn execute<E: AccountDb>(code: &[u8], account: &AccountId, account_db: &E) -> bool {
-		// TODO: Inspect the binary to extract the initial pages number.
+		// TODO: Inspect the binary to extract the initial page count.
 		let memory: RefCell<sandbox::Memory> = RefCell::new(sandbox::Memory::new(1, None));
-
-		let ext_transfer = |args: &[sandbox::Value]| {
-			let transfer_to_ptr = args[0].as_i32() as u32;
-			// TODO: This isn't a u32 but u64. But oh well...
-			let balance = args[1].as_i32() as u64;
-
-			let mut transfer_to = [0; 32];
-			memory.borrow().get(transfer_to_ptr, &mut transfer_to);
-
-			let overlay = OverlayAccountDb::new(account_db);
-			if let Some(commit_state) = effect_transfer(account, &transfer_to, balance, overlay) {
-				account_db.merge(commit_state);
-			}
-		};
 
 		let ext_put_storage = |args: &[sandbox::Value]| {
 			let location_ptr = args[0].as_i32() as u32;
@@ -374,10 +360,50 @@ pub mod public {
 			account_db.get_storage(account, &location);
 		};
 
+		let ext_transfer = |args: &[sandbox::Value]| {
+			// ext_transfer(transfer_to: u32, value: u32)
+			let transfer_to_ptr = args[0].as_i32() as u32;
+			// TODO: This isn't a u32 but u64. But oh well...
+			let value = args[1].as_i32() as u64;
+
+			let mut transfer_to = [0; 32];
+			memory.borrow().get(transfer_to_ptr, &mut transfer_to);
+
+			let overlay = OverlayAccountDb::new(account_db);
+			if let Some(commit_state) = effect_transfer(account, &transfer_to, value, overlay) {
+				account_db.merge(commit_state);
+			}
+			// TODO: Trap?
+		};
+
+		let ext_create = |args: &[sandbox::Value]| {
+			// ext_create(code_ptr: u32, code_len: u32, value: u32)
+			let code_ptr = args[0].as_i32() as u32;
+			let code_len = args[1].as_i32() as u32;
+			let value = args[2].as_i32() as u32;
+
+			let mut code = vec![0u8; code_len as usize];
+			memory.borrow().get(code_ptr, &mut code);
+
+			let overlay = OverlayAccountDb::new(account_db);
+			if let Some(commit_state) = effect_create(account, &code, value as u64, overlay) {
+				account_db.merge(commit_state);
+			}
+			// TODO: Trap?
+		};
+
+		// TODO: Signatures.
+		// TODO: Rename ext_put_storage -> ext_set_storage.
 		let mut sandbox = sandbox::Sandbox::new();
 		sandbox.register_closure("env", "ext_put_storage", &ext_put_storage);
 		sandbox.register_closure("env", "ext_get_storage", &ext_get_storage);
 		sandbox.register_closure("env", "ext_transfer", &ext_transfer);
+		sandbox.register_closure("env", "ext_create", &ext_create);
+		// TODO: ext_crate
+		// TODO: ext_balance
+		// TODO: ext_address
+		// TODO: ext_callvalue
+		// TODO: ext_panic
 		sandbox.register_memory("env", "memory", memory.borrow().clone());
 
 		let instance = sandbox.instantiate(code);
@@ -685,17 +711,26 @@ mod tests {
 	}
 
 	#[test]
-	fn transfer_to_contract() {
+	fn contract_transfer() {
 		let one = Keyring::One.to_raw_public();
 		let two = Keyring::Two.to_raw_public();
+		let three = [0xAAu8; 32];
 
 		let mut t: TestExternalities = map![
 			twox_128(&one.to_keyed_vec(BALANCE_OF)).to_vec() => vec![].and(&111u64),
-			twox_128(&two.to_keyed_vec(CODE_OF)).to_vec() => include_bytes!("/Users/pepyakin/dev/parity/temp/polkadot-demo-initial-contracts/put_storage.wasm").to_vec()
+			twox_128(&two.to_keyed_vec(BALANCE_OF)).to_vec() => vec![].and(&0u64),
+			twox_128(&two.to_keyed_vec(CODE_OF)).to_vec() => include_bytes!("/Users/pepyakin/dev/parity/temp/polkadot-demo-initial-contracts/transfer.wasm").to_vec(),
+			twox_128(&three.to_keyed_vec(BALANCE_OF)).to_vec() => vec![].and(&30u64)
 		];
 
 		with_externalities(&mut t, || {
-			transfer(&one, &two, 1);
+			// Contract at the address `two` sends 6 units of the balance
+			// to account at address `three`.
+			transfer(&one, &two, 11);
+
+			assert_eq!(balance(&one), 100);
+			assert_eq!(balance(&two), 5);
+			assert_eq!(balance(&three), 36);
 		});
 	}
 }
