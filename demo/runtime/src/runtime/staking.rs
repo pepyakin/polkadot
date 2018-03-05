@@ -105,9 +105,9 @@ pub fn total_stake() -> Balance {
 pub mod public {
 	use super::*;
 
-	type State = BTreeMap<AccountId, (Option<Balance>, Option<Vec<u8>>, BTreeMap<Vec<u8>, Option<Vec<u8>>>)>;
+	pub(super) type State = BTreeMap<AccountId, (Option<Balance>, Option<Vec<u8>>, BTreeMap<Vec<u8>, Option<Vec<u8>>>)>;
 
-	trait AccountDb {
+	pub(super) trait AccountDb {
 		fn get_storage(&self, account: &AccountId, location: &[u8]) -> Option<Vec<u8>>;
 		fn get_code(&self, account: &AccountId) -> Vec<u8>;
 		fn get_balance(&self, account: &AccountId) -> Balance;
@@ -119,7 +119,7 @@ pub mod public {
 		fn merge(&self, state: State);
 	}
 
-	struct DirectAccountDb;
+	pub(super) struct DirectAccountDb;
 	impl AccountDb for DirectAccountDb {
 		fn get_storage(&self, account: &AccountId, location: &[u8]) -> Option<Vec<u8>> {
 			let mut v = account.to_keyed_vec(STORAGE_OF);
@@ -169,7 +169,7 @@ pub mod public {
 		}
 	}
 
-	struct OverlayAccountDb<'a> {
+	pub(super) struct OverlayAccountDb<'a> {
 		local: RefCell<State>,
 		ext: &'a AccountDb,
 	}
@@ -350,7 +350,6 @@ pub mod public {
 			if value_non_null != 0 {
 				let mut value = [0; 32];
 				memory.borrow().get(value_ptr, &mut value);
-
 				account_db.set_storage(account, location.to_vec(), Some(value.to_vec()));
 			} else {
 				account_db.set_storage(account, location.to_vec(), None);
@@ -358,12 +357,18 @@ pub mod public {
 		};
 
 		let ext_get_storage = |args: &[sandbox::Value]| {
+			// ext_get_storage(location_ptr: u32, dest_ptr: u32);
 			let location_ptr = args[0].as_i32() as u32;
+			let dest_ptr = args[1].as_i32() as u32;
 
 			let mut location = [0; 32];
 			memory.borrow().get(location_ptr, &mut location);
 
-			account_db.get_storage(account, &location);
+			if let Some(value) = account_db.get_storage(account, &location) {
+				memory.borrow().set(dest_ptr, &value);
+			} else {
+				memory.borrow().set(dest_ptr, &[0u8; 32]);
+			}
 		};
 
 		let ext_transfer = |args: &[sandbox::Value]| {
@@ -399,6 +404,18 @@ pub mod public {
 			// TODO: Trap?
 		};
 
+		// let ext_debug = |args: &[sandbox::Value]| {
+		// 	// ext_debug(msg_ptr: u32, msg_len: u32)
+		// 	let msg_ptr = args[0].as_i32() as u32;
+		// 	let msg_len = args[1].as_i32() as u32;
+
+		// 	let mut msg = Vec::new();
+		// 	msg.resize(msg_len as usize, 0u8);
+		// 	memory.borrow().get(msg_ptr, &mut msg);
+
+		// 	println!("debug({:?}) = {:?}", args, msg);
+		// };
+
 		// TODO: Signatures.
 		// TODO: Rename ext_put_storage -> ext_set_storage.
 		let mut sandbox = sandbox::Sandbox::new();
@@ -410,6 +427,7 @@ pub mod public {
 		// TODO: ext_address
 		// TODO: ext_callvalue
 		// TODO: ext_panic
+		// sandbox.register_closure("env", "ext_debug", &ext_debug);
 		sandbox.register_memory("env", "memory", memory.borrow().clone());
 
 		let instance = sandbox.instantiate(code);
@@ -718,6 +736,7 @@ mod tests {
 
 	const CREATE_WASM: &[u8] = include_bytes!("/Users/pepyakin/dev/parity/temp/polkadot-demo-initial-contracts/create.wasm");
 	const TRANSFER_WASM: &[u8] = include_bytes!("/Users/pepyakin/dev/parity/temp/polkadot-demo-initial-contracts/transfer.wasm");
+	const ADDER_WASM: &[u8] = include_bytes!("/Users/pepyakin/dev/parity/temp/polkadot-demo-initial-contracts/adder.wasm");
 
 	#[test]
 	fn contract_transfer() {
@@ -756,12 +775,43 @@ mod tests {
 		];
 
 		with_externalities(&mut t, || {
-			// When invoked, contract at address `two` must create the 'transfer' contract.
+			// When invoked, the contract at address `two` must create the 'transfer' contract.
 			transfer(&one, &two, 11);
 
 			assert_eq!(balance(&one), 100);
 			assert_eq!(balance(&two), 8);
 			assert_eq!(balance(&created), 3);
+		});
+	}
+
+	#[test]
+	fn contract_storage() {
+		let one = Keyring::One.to_raw_public();
+		let two = Keyring::Two.to_raw_public();
+
+		let mut t: TestExternalities = map![
+			twox_128(&one.to_keyed_vec(BALANCE_OF)).to_vec() => vec![].and(&111u64),
+			twox_128(&two.to_keyed_vec(BALANCE_OF)).to_vec() => vec![].and(&0u64),
+			twox_128(&two.to_keyed_vec(CODE_OF)).to_vec() => ADDER_WASM.to_vec()
+		];
+
+		with_externalities(&mut t, || {
+			// When invoked, the contract should increment the storage at the address 1.
+			transfer(&one, &two, 1);
+			transfer(&one, &two, 1);
+
+			let storage_addr = [0x01u8; 32];
+			let value = DirectAccountDb.get_storage(&two, &storage_addr).unwrap();
+
+			assert_eq!(
+				&value,
+				&[
+					2, 0, 0, 0, 0, 0, 0, 0,
+					0, 0, 0, 0, 0, 0, 0, 0,
+					0, 0, 0, 0, 0, 0, 0, 0,
+					0, 0, 0, 0, 0, 0, 0, 0
+				]
+			);
 		});
 	}
 }

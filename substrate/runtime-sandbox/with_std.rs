@@ -129,6 +129,10 @@ impl Memory {
 	pub fn get(&self, ptr: u32, buf: &mut [u8]) {
 		self.memref.get_into(ptr, buf).unwrap();
 	}
+
+	pub fn set(&self, ptr: u32, value: &[u8]) {
+		self.memref.set(ptr, value).unwrap();
+	}
 }
 
 impl<'a> Sandbox<'a> {

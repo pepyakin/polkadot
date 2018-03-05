@@ -39,6 +39,10 @@ impl Memory {
 	pub fn get(&self, _ptr: u32, _buf: &mut [u8]) {
 		panic!()
 	}
+
+	pub fn set(&self, _ptr: u32, _value: &[u8]) {
+		panic!()
+	}
 }
 
 impl<'a> Sandbox<'a> {
