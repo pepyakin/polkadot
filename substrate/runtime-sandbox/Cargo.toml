@@ -9,11 +9,15 @@ rustc_version = "0.2"
 
 [dependencies]
 wasmi = { path = "/Users/pepyakin/dev/parity/wasmi", optional = true }
+substrate-runtime-std = { path = "../runtime-std", default_features = false }
+substrate-runtime-io = { path = "../runtime-io", default_features = false }
 
 [features]
 default = ["std"]
 std = [
-	"wasmi"
+	"wasmi",
+	"substrate-runtime-std/std",
+	"substrate-runtime-io/std",
 ]
 nightly = []
 strict = []

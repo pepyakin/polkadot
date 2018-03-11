@@ -305,7 +305,12 @@ pub mod public {
 		let from_balance = ext.get_balance(transactor);
 		assert!(from_balance >= value);
 
+		print(value);
+		print(from_balance);
+
 		let to_balance = ext.get_balance(dest);
+		print(to_balance);
+
 		assert!(bondage(transactor) <= bondage(dest));
 		assert!(to_balance + value > to_balance);	// no overflow
 
@@ -372,6 +377,10 @@ pub mod public {
 		};
 
 		let ext_transfer = |args: &[sandbox::Value]| {
+			print(1337);
+			print(args[0].as_i32() as u64);
+			print(args[1].as_i32() as u64);
+
 			// ext_transfer(transfer_to: u32, value: u32)
 			let transfer_to_ptr = args[0].as_i32() as u32;
 			// TODO: This isn't a u32 but u64. But oh well...

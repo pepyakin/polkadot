@@ -21,6 +21,9 @@
 #![cfg_attr(not(feature = "std"), feature(core_intrinsics))]
 #![cfg_attr(not(feature = "std"), feature(alloc))]
 
+extern crate substrate_runtime_std as rstd;
+extern crate substrate_runtime_io as runtime_io;
+
 #[cfg(feature = "std")]
 include!("../with_std.rs");
 

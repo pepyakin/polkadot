@@ -277,4 +277,33 @@ mod tests {
 			assert_eq!(balance(&two), 69);
 		});
 	}
+
+	const TRANSFER_WASM: &[u8] = include_bytes!("/Users/pepyakin/dev/parity/temp/polkadot-demo-initial-contracts/transfer.wasm");
+
+	#[test]
+	fn wasm_test() {
+		let one = Keyring::One.to_raw_public();
+		let two = Keyring::Two.to_raw_public();
+		let three = [0xAAu8; 32];
+
+		let mut t: TestExternalities = map![
+			twox_128(&one.to_keyed_vec(b"sta:bal:")).to_vec() => vec![].and(&111u64),
+			twox_128(&two.to_keyed_vec(b"sta:bal:")).to_vec() => vec![].and(&0u64),
+			twox_128(&two.to_keyed_vec(b"sta:cod:")).to_vec() => TRANSFER_WASM.to_vec(),
+			twox_128(&three.to_keyed_vec(b"sta:bal:")).to_vec() => vec![].and(&30u64)
+		];
+
+		let foreign_code = include_bytes!("../../runtime/wasm/target/wasm32-unknown-unknown/release/demo_runtime.compact.wasm");
+		let r = WasmExecutor.call(&mut t, &foreign_code[..], "execute_transaction", &vec![].and(&Header::from_block_number(1u64)).and(&tx()));
+
+		if r.is_err() {
+			panic!("{:?}", r);
+		}
+
+		runtime_io::with_externalities(&mut t, || {
+			assert_eq!(balance(&one), 42);
+			assert_eq!(balance(&two), 63);
+			assert_eq!(balance(&three), 36);
+		});
+	}
 }
