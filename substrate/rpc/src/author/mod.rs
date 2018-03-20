@@ -14,28 +14,34 @@
 // You should have received a copy of the GNU General Public License
 // along with Substrate.  If not, see <http://www.gnu.org/licenses/>.
 
-//! Substrate RPC interfaces.
+//! Substrate block-author/full-node API.
 
-#![warn(missing_docs)]
+use primitives::block;
+use client;
+use state_machine;
 
-extern crate jsonrpc_core as rpc;
-extern crate substrate_client as client;
-extern crate substrate_primitives as primitives;
-extern crate substrate_state_machine as state_machine;
-
-#[macro_use]
-extern crate error_chain;
-#[macro_use]
-extern crate jsonrpc_macros;
+mod error;
 
 #[cfg(test)]
-extern crate substrate_executor;
-#[cfg(test)]
-#[macro_use]
-extern crate assert_matches;
-#[cfg(test)]
-extern crate substrate_runtime_support as runtime_support;
+mod tests;
 
-pub mod chain;
-pub mod state;
-pub mod author;
+use self::error::{Result};
+
+build_rpc_trait! {
+	/// Polkadot blockchain API
+	pub trait AuthorApi {
+		/// Get header of a relay chain block.
+		#[rpc(name = "author_transact")]
+		fn transact(&self, block::Transaction) -> Result<()>;
+	}
+}
+
+impl<B, E> AuthorApi for client::Client<B, E> where
+	B: client::backend::Backend + Send + Sync + 'static,
+	E: state_machine::CodeExecutor + Send + Sync + 'static,
+	client::error::Error: From<<<B as client::backend::Backend>::State as state_machine::backend::Backend>::Error>,
+{
+	fn transact(&self, tx: block::Transaction) -> Result<()> {
+		Ok(self.submit_transaction(tx)?)
+	}
+}

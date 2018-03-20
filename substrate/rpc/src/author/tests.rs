@@ -14,28 +14,25 @@
 // You should have received a copy of the GNU General Public License
 // along with Substrate.  If not, see <http://www.gnu.org/licenses/>.
 
-//! Substrate RPC interfaces.
+use primitives::block;
+use substrate_executor as executor;
+use client;
+use super::*;
 
-#![warn(missing_docs)]
+#[test]
+fn should_return_header() {
+	let test_genesis_block = block::Header {
+		parent_hash: 0.into(),
+		number: 0,
+		state_root: 0.into(),
+		transaction_root: Default::default(),
+		digest: Default::default(),
+	};
 
-extern crate jsonrpc_core as rpc;
-extern crate substrate_client as client;
-extern crate substrate_primitives as primitives;
-extern crate substrate_state_machine as state_machine;
+	let client = client::new_in_mem(executor::WasmExecutor, || (test_genesis_block.clone(), vec![])).unwrap();
 
-#[macro_use]
-extern crate error_chain;
-#[macro_use]
-extern crate jsonrpc_macros;
-
-#[cfg(test)]
-extern crate substrate_executor;
-#[cfg(test)]
-#[macro_use]
-extern crate assert_matches;
-#[cfg(test)]
-extern crate substrate_runtime_support as runtime_support;
-
-pub mod chain;
-pub mod state;
-pub mod author;
+	assert_matches!(
+		AuthorApi::submit_transaction(&client, block::Transaction(vec![])),
+		Ok(())
+	);
+}

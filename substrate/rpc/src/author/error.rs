@@ -14,28 +14,31 @@
 // You should have received a copy of the GNU General Public License
 // along with Substrate.  If not, see <http://www.gnu.org/licenses/>.
 
-//! Substrate RPC interfaces.
+use client;
+use rpc;
 
-#![warn(missing_docs)]
+error_chain! {
+	links {
+		Client(client::error::Error, client::error::ErrorKind) #[doc = "Client error"];
+	}
+	errors {
+		/// Not implemented yet
+		Unimplemented {
+			description("not yet implemented"),
+			display("Method Not Implemented"),
+		}
+	}
+}
 
-extern crate jsonrpc_core as rpc;
-extern crate substrate_client as client;
-extern crate substrate_primitives as primitives;
-extern crate substrate_state_machine as state_machine;
-
-#[macro_use]
-extern crate error_chain;
-#[macro_use]
-extern crate jsonrpc_macros;
-
-#[cfg(test)]
-extern crate substrate_executor;
-#[cfg(test)]
-#[macro_use]
-extern crate assert_matches;
-#[cfg(test)]
-extern crate substrate_runtime_support as runtime_support;
-
-pub mod chain;
-pub mod state;
-pub mod author;
+impl From<Error> for rpc::Error {
+	fn from(e: Error) -> Self {
+		match e {
+			Error(ErrorKind::Unimplemented, _) => rpc::Error {
+				code: rpc::ErrorCode::ServerError(-1),
+				message: "Not implemented yet".into(),
+				data: None,
+			},
+			_ => rpc::Error::internal_error(),
+		}
+	}
+}
