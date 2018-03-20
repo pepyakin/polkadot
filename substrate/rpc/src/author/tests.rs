@@ -20,7 +20,7 @@ use client;
 use super::*;
 
 #[test]
-fn should_return_header() {
+fn submit_transaction_should_not_cause_error() {
 	let test_genesis_block = block::Header {
 		parent_hash: 0.into(),
 		number: 0,
@@ -32,7 +32,7 @@ fn should_return_header() {
 	let client = client::new_in_mem(executor::WasmExecutor, || (test_genesis_block.clone(), vec![])).unwrap();
 
 	assert_matches!(
-		AuthorApi::submit_transaction(&client, block::Transaction(vec![])),
+		AuthorApi::transact(&client, block::Transaction(vec![])),
 		Ok(())
 	);
 }
