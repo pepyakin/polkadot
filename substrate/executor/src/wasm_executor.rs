@@ -614,11 +614,6 @@ impl CodeExecutor for WasmExecutor {
 		println!("Wasm-Calling {}({})", method, HexDisplay::from(&data));
 
 		let module = Module::from_buffer(code).expect("all modules compiled with rustc are valid wasm code; qed");
-		let instance = ModuleInstance::new(
-			&module,
-			&ImportsBuilder::new()
-				.with_resolver("env", FunctionExecutor::<E>::resolver())
-		)?;
 
 		// start module instantiation. Don't run 'start' function yet.
 		let intermediate_instance = ModuleInstance::new(
@@ -637,7 +632,7 @@ impl CodeExecutor for WasmExecutor {
 			.clone();
 
         // TODO: unwrap -> to expect
-        let table = instance.not_started_instance().export_by_name("table").unwrap().as_table().unwrap().clone();
+        let table = intermediate_instance.not_started_instance().export_by_name("table").unwrap().as_table().unwrap().clone();
 
 		let mut fec = FunctionExecutor::new(memory.clone(), table.clone(), ext)?;
 
