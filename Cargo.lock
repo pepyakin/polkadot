@@ -1689,7 +1689,7 @@ dependencies = [
  "rustc_version 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "substrate-runtime-io 0.1.0",
  "substrate-runtime-std 0.1.0",
- "wasmi 0.1.0",
+ "wasmi 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -2015,15 +2015,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 name = "void"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-
-[[package]]
-name = "wasmi"
-version = "0.1.0"
-dependencies = [
- "byteorder 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "memory_units 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "parity-wasm 0.27.1 (registry+https://github.com/rust-lang/crates.io-index)",
-]
 
 [[package]]
 name = "wasmi"
