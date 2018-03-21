@@ -57,26 +57,10 @@ macro_rules! gen_signature {
 
 	( ( $( $params: ty ),* ) -> $returns: ty ) => (
 		{
-			$crate::wasmi::Signature::new(&convert_args!($($params),*)[..], Some({ use $crate::wasm_utils::ConvertibleToWasm; <$returns>::VALUE_TYPE }))
+			$crate::wasmi::Signature::new(&convert_args!($($params),*)[..], Some({
+				use $crate::wasm_utils::ConvertibleToWasm; <$returns>::VALUE_TYPE
+			}))
 		}
-	);
-}
-
-#[macro_export]
-macro_rules! check_signature {
-	( @iter $index:expr, $index_ident:ident, $signature:ident,  ) => ({
-		panic!("fn with index {} is undefined", $index);
-	});
-
-	( @iter $index:expr, $index_ident:ident, $signature:ident, ( ( $( $params:ty ),* ) $( -> $returns:ty )* ) $(, $tail:tt)* ) => (
-		if $index_ident == $index {
-			return signature_equals!($signature, ( $( $params ),* ) $( -> $returns )* );
-		}
-		check_signature!(@iter $index + 1, $index_ident, $signature, $($tail),* );
-	);
-
-	( $index_ident:ident, $signature:ident, $( ( $( $params:ty ),* ) $( -> $returns:ty )*),* ) => (
-		check_signature!(@iter 0, $index_ident, $signature, $( ( ( $( $params ),* ) $( -> $returns )* ) ),* );
 	);
 }
 
@@ -102,64 +86,85 @@ macro_rules! resolve_fn {
 
 #[macro_export]
 macro_rules! unmarshall_args {
-	( $body:tt, $objectname:ident, $args_iter:ident, $args_index:ident, $( $names:ident : $params:ty ),*) => ({
+	( $body:tt, $objectname:ident, $args_iter:ident, $( $names:ident : $params:ty ),*) => ({
 		$(
 			let $names : <$params as $crate::wasm_utils::ConvertibleToWasm>::NativeType =
-				$args_iter.nth({
-					let idx = $args_index;
-					$args_index += 1;
-					idx
-				});
+				$args_iter.next()
+					.and_then(|rt_val| rt_val.try_into())
+					.expect(
+						"`$args_iter` comes from an argument of Externals::invoke_index;
+						args to an external call always matches the signature of the external;
+						external signatures are built with count and types and in order defined by `$params`;
+						here, we iterating on `$params`;
+						qed;
+						"
+					);
 		)*
 		$body
 	})
 }
 
+/// Since we can't specify the type of closure directly at binding site:
+///
+/// ```rust,ignore
+/// let f: FnOnce() -> Result<<u32 as ConvertibleToWasm>::NativeType, _> = || { /* ... */ };
+/// ```
+///
+/// we use this function to constrain the type of the closure.
 #[inline(always)]
-pub fn constrain_closure<R, F: FnOnce() -> Result<R, ::wasmi::Trap>>(f: F) -> F {
+pub fn constrain_closure<R, F>(f: F) -> F
+where
+	F: FnOnce() -> Result<R, ::wasmi::Trap>
+{
 	f
 }
 
 #[macro_export]
 macro_rules! marshall {
-	( $args_iter:ident, $args_index:ident, $objectname:ident, ( $( $names:ident : $params:ty ),* ) -> $returns:ty => $body:tt ) => ({
-		let body = $crate::wasm_utils::constrain_closure::<<$returns as $crate::wasm_utils::ConvertibleToWasm>::NativeType, _>(|| { unmarshall_args!($body, $objectname, $args_iter, $args_index, $( $names : $params ),*) });
+	( $args_iter:ident, $objectname:ident, ( $( $names:ident : $params:ty ),* ) -> $returns:ty => $body:tt ) => ({
+		let body = $crate::wasm_utils::constrain_closure::<
+			<$returns as $crate::wasm_utils::ConvertibleToWasm>::NativeType, _
+		>(|| {
+			unmarshall_args!($body, $objectname, $args_iter, $( $names : $params ),*)
+		});
 		let r = body()?;
 		return Ok(Some({ use $crate::wasm_utils::ConvertibleToWasm; r.to_runtime_value() }))
 	});
-	( $args_iter:ident, $args_index:ident, $objectname:ident, ( $( $names:ident : $params:ty ),* ) => $body:tt ) => ({
-		let body = $crate::wasm_utils::constrain_closure::<(), _>(|| { unmarshall_args!($body, $objectname, $args_iter, $args_index, $( $names : $params ),*) });
+	( $args_iter:ident, $objectname:ident, ( $( $names:ident : $params:ty ),* ) => $body:tt ) => ({
+		let body = $crate::wasm_utils::constrain_closure::<(), _>(|| {
+			unmarshall_args!($body, $objectname, $args_iter, $( $names : $params ),*)
+		});
 		body()?;
 		return Ok(None)
 	})
 }
 
 macro_rules! dispatch_fn {
-	( @iter $index:expr, $index_ident:ident, $objectname:ident, $args_iter:ident, $args_index:ident) => {
+	( @iter $index:expr, $index_ident:ident, $objectname:ident, $args_iter:ident) => {
+		// `$index` comes from an argument of Externals::invoke_index;
+		// externals are always invoked with index given by resolve_fn! at resolve time;
+		// For each next function resolve_fn! gives new index, starting from 0;
+		// Both dispatch_fn! and resolve_fn! are called with the same list of functions;
+		// qed;
 		panic!("fn with index {} is undefined", $index);
 	};
 
-	( @iter $index:expr, $index_ident:ident, $objectname:ident, $args_iter:ident, $args_index:ident, $name:ident ( $( $names:ident : $params:ty ),* ) $( -> $returns:ty )* => $body:tt $($tail:tt)*) => (
+	( @iter $index:expr, $index_ident:ident, $objectname:ident, $args_iter:ident, $name:ident ( $( $names:ident : $params:ty ),* ) $( -> $returns:ty )* => $body:tt $($tail:tt)*) => (
 		if $index_ident == $index {
-			{ marshall!($args_iter, $args_index, $objectname, ( $( $names : $params ),* ) $( -> $returns )* => $body) }
+			{ marshall!($args_iter, $objectname, ( $( $names : $params ),* ) $( -> $returns )* => $body) }
 		}
-		dispatch_fn!( @iter $index + 1, $index_ident, $objectname, $args_iter, $args_index $($tail)*)
+		dispatch_fn!( @iter $index + 1, $index_ident, $objectname, $args_iter $($tail)*)
 	);
 
-	( $index_ident:ident, $objectname:ident, $args_iter:ident, $args_index:ident, $($tail:tt)* ) => (
-		dispatch_fn!( @iter 0, $index_ident, $objectname, $args_iter, $args_index, $($tail)*);
+	( $index_ident:ident, $objectname:ident, $args_iter:ident, $($tail:tt)* ) => (
+		dispatch_fn!( @iter 0, $index_ident, $objectname, $args_iter, $($tail)*);
 	);
 }
 
 #[macro_export]
 macro_rules! impl_function_executor {
 	( $objectname:ident : $structname:ty,
-	  funcs {
-		  $( $name:ident ( $( $names:ident : $params:ty ),* ) $( -> $returns:ty )* => $body:tt , )*
-	  },
-	  memories {
-		  $( $mem_names:ident , )*
-	  },
+	  $( $name:ident ( $( $names:ident : $params:ty ),* ) $( -> $returns:ty )* => $body:tt , )*
 	  => $($pre:tt)+ ) => (
 		impl $( $pre ) + $structname {
 			#[allow(unused)]
@@ -185,9 +190,8 @@ macro_rules! impl_function_executor {
 				args: $crate::wasmi::RuntimeArgs,
 			) -> ::std::result::Result<Option<$crate::wasmi::RuntimeValue>, $crate::wasmi::Trap> {
 				let $objectname = self;
-				let mut args_index = 0;
-				let args = args;
-				dispatch_fn!(index, $objectname, args, args_index, $( $name( $( $names : $params ),* ) $( -> $returns )* => $body ),*);
+				let mut args = args.as_ref().iter();
+				dispatch_fn!(index, $objectname, args, $( $name( $( $names : $params ),* ) $( -> $returns )* => $body ),*);
 			}
 		}
 	);

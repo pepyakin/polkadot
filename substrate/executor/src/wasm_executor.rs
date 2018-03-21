@@ -269,320 +269,315 @@ fn ascii_format(asciish: &[u8]) -> String {
 }
 
 impl_function_executor!(this: FunctionExecutor<'e, E>,
-	funcs {
-		ext_print_utf8(utf8_data: *const u8, utf8_len: u32) => {
-			if let Ok(utf8) = this.memory.get(utf8_data, utf8_len as usize) {
-				if let Ok(message) = String::from_utf8(utf8) {
-					println!("{}", message);
-				}
+	ext_print_utf8(utf8_data: *const u8, utf8_len: u32) => {
+		if let Ok(utf8) = this.memory.get(utf8_data, utf8_len as usize) {
+			if let Ok(message) = String::from_utf8(utf8) {
+				println!("{}", message);
 			}
-			Ok(())
-		},
-		ext_print_hex(data: *const u8, len: u32) => {
-			if let Ok(hex) = this.memory.get(data, len as usize) {
-				println!("{}", HexDisplay::from(&hex));
-			}
-			Ok(())
-		},
-		ext_print_num(number: u64) => {
-			println!("{}", number);
-			Ok(())
-		},
-		ext_memcmp(s1: *const u8, s2: *const u8, n: usize) -> i32 => {
-			let sl1 = this.memory.get(s1, n as usize).map_err(|_| Trap::new(TrapKind::Unreachable))?;
-			let sl2 = this.memory.get(s2, n as usize).map_err(|_| DummyUserError)?;
-			Ok(match sl1.cmp(&sl2) {
-				Ordering::Greater => 1,
-				Ordering::Less => -1,
-				Ordering::Equal => 0,
-			})
-		},
-		ext_memcpy(dest: *mut u8, src: *const u8, count: usize) -> *mut u8 => {
-			this.memory.copy_nonoverlapping(src as usize, dest as usize, count as usize)
-				.map_err(|_| DummyUserError)?;
-			trace!(target: "runtime-io", "memcpy {} from {}, {} bytes", dest, src, count);
-			Ok(dest)
-		},
-		ext_memmove(dest: *mut u8, src: *const u8, count: usize) -> *mut u8 => {
-			this.memory.copy(src as usize, dest as usize, count as usize)
-				.map_err(|_| DummyUserError)?;
-			trace!(target: "runtime-io", "memmove {} from {}, {} bytes", dest, src, count);
-			Ok(dest)
-		},
-		ext_memset(dest: *mut u8, val: u32, count: usize) -> *mut u8 => {
-			this.memory.clear(dest as usize, val as u8, count as usize)
-				.map_err(|_| DummyUserError)?;
-			trace!(target: "runtime-io", "memset {} with {}, {} bytes", dest, val, count);
-			Ok(dest)
-		},
-		ext_malloc(size: usize) -> *mut u8 => {
-			let r = this.heap.allocate(size);
-			trace!(target: "runtime-io", "malloc {} bytes at {}", size, r);
-			Ok(r)
-		},
-		ext_free(addr: *mut u8) => {
-			this.heap.deallocate(addr);
-			trace!(target: "runtime-io", "free {}", addr);
-			Ok(())
-		},
-		ext_set_storage(key_data: *const u8, key_len: u32, value_data: *const u8, value_len: u32) => {
-			let key = this.memory.get(key_data, key_len as usize).map_err(|_| DummyUserError)?;
-			let value = this.memory.get(value_data, value_len as usize).map_err(|_| DummyUserError)?;
-			if let Some(preimage) = this.hash_lookup.get(&key) {
-				info!(target: "wasm-trace", "*** Setting storage: %{} -> {}   [k={}]", ascii_format(&preimage), HexDisplay::from(&value), HexDisplay::from(&key));
-			} else {
-				info!(target: "wasm-trace", "*** Setting storage:  {} -> {}   [k={}]", ascii_format(&key), HexDisplay::from(&value), HexDisplay::from(&key));
-			}
-			this.ext.set_storage(key, value);
-			Ok(())
-		},
-		ext_clear_storage(key_data: *const u8, key_len: u32) => {
-			let key = this.memory.get(key_data, key_len as usize).map_err(|_| DummyUserError)?;
-			if let Some(preimage) = this.hash_lookup.get(&key) {
-				info!(target: "wasm-trace", "*** Clearing storage: %{}   [k={}]", ascii_format(&preimage), HexDisplay::from(&key));
-			} else {
-				info!(target: "wasm-trace", "*** Clearing storage:  {}   [k={}]", ascii_format(&key), HexDisplay::from(&key));
-			}
-			this.ext.clear_storage(&key);
-			Ok(())
-		},
-		// return 0 and place u32::max_value() into written_out if no value exists for the key.
-		ext_get_allocated_storage(key_data: *const u8, key_len: u32, written_out: *mut u32) -> *mut u8 => {
-			let key = this.memory.get(key_data, key_len as usize).map_err(|_| DummyUserError)?;
-			let maybe_value = this.ext.storage(&key);
-
-			if let Some(preimage) = this.hash_lookup.get(&key) {
-				info!(target: "wasm-trace", "    Getting storage: %{} == {}   [k={}]", ascii_format(&preimage), if let Some(ref b) = maybe_value { format!("{}", HexDisplay::from(b)) } else { "<empty>".to_owned() }, HexDisplay::from(&key));
-			} else {
-				info!(target: "wasm-trace", "    Getting storage:  {} == {}   [k={}]", ascii_format(&key), if let Some(ref b) = maybe_value { format!("{}", HexDisplay::from(b)) } else { "<empty>".to_owned() }, HexDisplay::from(&key));
-			}
-
-			if let Some(value) = maybe_value {
-				let offset = this.heap.allocate(value.len() as u32) as u32;
-				this.memory.set(offset, &value).map_err(|_| DummyUserError)?;
-				this.memory.write_primitive(written_out, value.len() as u32)?;
-				Ok(offset)
-			} else {
-				this.memory.write_primitive(written_out, u32::max_value())?;
-				Ok(0)
-			}
-		},
-		// return u32::max_value() if no value exists for the key.
-		ext_get_storage_into(key_data: *const u8, key_len: u32, value_data: *mut u8, value_len: u32, value_offset: u32) -> u32 => {
-			let key = this.memory.get(key_data, key_len as usize).map_err(|_| DummyUserError)?;
-			let maybe_value = this.ext.storage(&key);
-			if let Some(preimage) = this.hash_lookup.get(&key) {
-				info!(target: "wasm-trace", "    Getting storage: %{} == {}   [k={}]", ascii_format(&preimage), if let Some(ref b) = maybe_value { format!("{}", HexDisplay::from(b)) } else { "<empty>".to_owned() }, HexDisplay::from(&key));
-			} else {
-				info!(target: "wasm-trace", "    Getting storage:  {} == {}   [k={}]", ascii_format(&key), if let Some(ref b) = maybe_value { format!("{}", HexDisplay::from(b)) } else { "<empty>".to_owned() }, HexDisplay::from(&key));
-			}
-			if let Some(value) = maybe_value {
-				let value = &value[value_offset as usize..];
-				let written = ::std::cmp::min(value_len as usize, value.len());
-				this.memory.set(value_data, &value[..written]).map_err(|_| DummyUserError)?;
-				Ok(written as u32)
-			} else {
-				Ok(u32::max_value())
-			}
-		},
-		ext_storage_root(result: *mut u8) => {
-			let r = this.ext.storage_root();
-			this.memory.set(result, &r[..]).map_err(|_| DummyUserError)?;
-			Ok(())
-		},
-		ext_enumerated_trie_root(values_data: *const u8, lens_data: *const u32, lens_len: u32, result: *mut u8) => {
-			let values = (0..lens_len)
-				.map(|i| this.memory.read_primitive(lens_data + i * 4))
-				.collect::<::std::result::Result<Vec<u32>, DummyUserError>>()?
-				.into_iter()
-				.scan(0u32, |acc, v| { let o = *acc; *acc += v; Some((o, v)) })
-				.map(|(offset, len)|
-					this.memory.get(values_data + offset, len as usize)
-						.map_err(|_| DummyUserError)
-				)
-				.collect::<::std::result::Result<Vec<_>, DummyUserError>>()?;
-			let r = ordered_trie_root(values.into_iter());
-			this.memory.set(result, &r[..]).map_err(|_| DummyUserError)?;
-			Ok(())
-		},
-		ext_chain_id() -> u64 => {
-			Ok(this.ext.chain_id())
-		},
-		ext_twox_128(data: *const u8, len: u32, out: *mut u8) => {
-			let result = if len == 0 {
-				let hashed = twox_128(&[0u8; 0]);
-				trace!(target: "xxhash", "XXhash: '' -> {}", HexDisplay::from(&hashed));
-				this.hash_lookup.insert(hashed.to_vec(), vec![]);
-				hashed
-			} else {
-				let key = this.memory.get(data, len as usize).map_err(|_| DummyUserError)?;
-				let hashed_key = twox_128(&key);
-				if let Ok(skey) = ::std::str::from_utf8(&key) {
-					trace!(target: "xxhash", "XXhash: {} -> {}", skey, HexDisplay::from(&hashed_key));
-				} else {
-					trace!(target: "xxhash", "XXhash: {} -> {}", HexDisplay::from(&key), HexDisplay::from(&hashed_key));
-				}
-				this.hash_lookup.insert(hashed_key.to_vec(), key);
-				hashed_key
-			};
-
-			this.memory.set(out, &result).map_err(|_| DummyUserError)?;
-			Ok(())
-		},
-		ext_twox_256(data: *const u8, len: u32, out: *mut u8) => {
-			let result = if len == 0 {
-				twox_256(&[0u8; 0])
-			} else {
-				twox_256(&this.memory.get(data, len as usize).map_err(|_| DummyUserError)?)
-			};
-			this.memory.set(out, &result).map_err(|_| DummyUserError)?;
-			Ok(())
-		},
-		ext_blake2_256(data: *const u8, len: u32, out: *mut u8) => {
-			let result = if len == 0 {
-				blake2_256(&[0u8; 0])
-			} else {
-				blake2_256(&this.memory.get(data, len as usize).map_err(|_| DummyUserError)?)
-			};
-			this.memory.set(out, &result).map_err(|_| DummyUserError)?;
-			Ok(())
-		},
-		ext_ed25519_verify(msg_data: *const u8, msg_len: u32, sig_data: *const u8, pubkey_data: *const u8) -> u32 => {
-			let mut sig = [0u8; 64];
-			this.memory.get_into(sig_data, &mut sig[..]).map_err(|_| DummyUserError)?;
-			let mut pubkey = [0u8; 32];
-			this.memory.get_into(pubkey_data, &mut pubkey[..]).map_err(|_| DummyUserError)?;
-			let msg = this.memory.get(msg_data, msg_len as usize).map_err(|_| DummyUserError)?;
-
-			Ok(if ::ed25519::verify(&sig, &msg, &pubkey) {
-				0
-			} else {
-				5
-			})
-		},
-		ext_sandbox_new() -> u32 => {
-			Ok(this.sandbox_store.new_sandbox())
-		},
-		ext_sandbox_instantiate(sandbox_id: u32, wasm_ptr: *const u8, wasm_len: usize) -> u32 => {
-			let wasm = this.memory.get(wasm_ptr, wasm_len as usize).map_err(|_| DummyUserError)?;
-
-			let sandbox = this.sandbox_store.sandboxes.get_mut(sandbox_id as usize).ok_or_else(|| DummyUserError)?;
-
-			// TODO: Remove unwraps and asserts.
-			let module = Module::from_buffer(wasm).unwrap();
-			let instance = ModuleInstance::new(
-				&module,
-				sandbox
-			).unwrap().assert_no_start();
-
-			sandbox.instances.push(instance);
-			let instance_idx = sandbox.instances.len() - 1;
-
-			Ok(instance_idx as u32)
-		},
-		ext_sandbox_invoke(sandbox_id: u32, instance_id: u32, export_ptr: *const u8, export_len: usize) -> u32 => {
-			println!("ext_sandbox_invoke, sandbox_id={}", sandbox_id);
-			let export = this.memory.get(export_ptr, export_len as usize)
-				.map_err(|_| DummyUserError)
-				.and_then(|b|
-					String::from_utf8(b)
-						.map_err(|_| DummyUserError)
-				)?;
-
-			let instance = {
-				let sandbox = this.sandbox_store.sandboxes.get_mut(sandbox_id as usize).ok_or_else(|| DummyUserError)?;
-				sandbox.instances.get(instance_id as usize).ok_or_else(|| DummyUserError)?.clone()
-			};
-
-			let original_memory = this.memory.clone();
-			let mut call_externals = SandboxCallExternals {
-				original_externals: this,
-				original_memory,
-				sandbox_id,
-			};
-
-			// TODO: Error handling
-			let _result = instance.invoke_export(&export, &[], &mut call_externals).unwrap();
-
-			Ok(0)
-		},
-		ext_sandbox_register_closure(
-			sandbox_id: u32,
-			module_name_ptr: *const u8,
-			module_name_len: usize,
-			field_name_ptr: *const u8,
-			field_name_len: usize,
-			user_data: *const u8,
-			fn_ptr: u32) =>
-		{
-			let module_name = this.memory.get(module_name_ptr, module_name_len as usize).map_err(|_| DummyUserError)?;
-			let field_name = this.memory.get(field_name_ptr, field_name_len as usize).map_err(|_| DummyUserError)?;
-
-			println!(
-				"ext_sandbox_register_closure, sandbox_id={}, module_name={:?}, field_name={:?}",
-				sandbox_id,
-				String::from_utf8_lossy(&module_name),
-				String::from_utf8_lossy(&field_name),
-			);
-
-			let func_ref = this.table.get(fn_ptr).map_err(|_| DummyUserError)?.ok_or_else(|| DummyUserError)?;
-
-			let sandbox = this.sandbox_store.sandboxes.get_mut(sandbox_id as usize).ok_or_else(|| DummyUserError)?;
-			sandbox.raw_closures.push(RawClosure {
-				user_data_offset: user_data,
-				func_ref,
-			});
-
-			let raw_closure_idx = sandbox.raw_closures.len() - 1;
-			sandbox.registered_funcs.insert((module_name, field_name), raw_closure_idx);
-
-			Ok(())
-		},
-		ext_sandbox_register_memory(
-			sandbox_id: u32,
-			module_name_ptr: *const u8,
-			module_name_len: usize,
-			field_name_ptr: *const u8,
-			field_name_len: usize,
-			memory_id: u32
-		) => {
-			let module_name = this.memory.get(module_name_ptr, module_name_len as usize).map_err(|_| DummyUserError)?;
-			let field_name = this.memory.get(field_name_ptr, field_name_len as usize).map_err(|_| DummyUserError)?;
-
-			let memref = this.sandbox_store.memories.get(memory_id as usize).ok_or_else(|| DummyUserError)?.clone();
-
-			let sandbox = this.sandbox_store.sandboxes.get_mut(sandbox_id as usize).ok_or_else(|| DummyUserError)?;
-			sandbox.registered_memories.insert((module_name, field_name), memref);
-
-			Ok(())
-		},
-		ext_sandbox_memory_new(initial: u32, maximum: u32) -> u32 => {
-			let maximum = if maximum == u32::max_value() {
-				None
-			} else {
-				Some(maximum)
-			};
-			Ok(this.sandbox_store.new_memory(initial, maximum))
-		},
-		ext_sandbox_memory_get(memory_id: u32, offset: u32, buf_ptr: *mut u8, buf_len: usize) => {
-			let memory = this.sandbox_store.memories.get(memory_id as usize).ok_or_else(|| DummyUserError)?;
-
-			let tmp: Vec<u8> = memory.get(offset, buf_len as usize).map_err(|_| DummyUserError)?;
-			this.memory.set(buf_ptr, &tmp).map_err(|_| DummyUserError)?;
-
-			Ok(())
-		},
-		ext_sandbox_memory_set(memory_id: u32, offset: u32, val_ptr: *const u8, val_len: usize) => {
-			let memory = this.sandbox_store.memories.get(memory_id as usize).ok_or_else(|| DummyUserError)?;
-
-			let tmp = this.memory.get(offset, val_len as usize).map_err(|_| DummyUserError)?;
-			memory.set(val_ptr, &tmp).map_err(|_| DummyUserError)?;
-
-			Ok(())
-		},
+		}
+		Ok(())
 	},
-	memories {
-		mem,
+	ext_print_hex(data: *const u8, len: u32) => {
+		if let Ok(hex) = this.memory.get(data, len as usize) {
+			println!("{}", HexDisplay::from(&hex));
+		}
+		Ok(())
+	},
+	ext_print_num(number: u64) => {
+		println!("{}", number);
+		Ok(())
+	},
+	ext_memcmp(s1: *const u8, s2: *const u8, n: usize) -> i32 => {
+		let sl1 = this.memory.get(s1, n as usize).map_err(|_| Trap::new(TrapKind::Unreachable))?;
+		let sl2 = this.memory.get(s2, n as usize).map_err(|_| DummyUserError)?;
+		Ok(match sl1.cmp(&sl2) {
+			Ordering::Greater => 1,
+			Ordering::Less => -1,
+			Ordering::Equal => 0,
+		})
+	},
+	ext_memcpy(dest: *mut u8, src: *const u8, count: usize) -> *mut u8 => {
+		this.memory.copy_nonoverlapping(src as usize, dest as usize, count as usize)
+			.map_err(|_| DummyUserError)?;
+		trace!(target: "runtime-io", "memcpy {} from {}, {} bytes", dest, src, count);
+		Ok(dest)
+	},
+	ext_memmove(dest: *mut u8, src: *const u8, count: usize) -> *mut u8 => {
+		this.memory.copy(src as usize, dest as usize, count as usize)
+			.map_err(|_| DummyUserError)?;
+		trace!(target: "runtime-io", "memmove {} from {}, {} bytes", dest, src, count);
+		Ok(dest)
+	},
+	ext_memset(dest: *mut u8, val: u32, count: usize) -> *mut u8 => {
+		this.memory.clear(dest as usize, val as u8, count as usize)
+			.map_err(|_| DummyUserError)?;
+		trace!(target: "runtime-io", "memset {} with {}, {} bytes", dest, val, count);
+		Ok(dest)
+	},
+	ext_malloc(size: usize) -> *mut u8 => {
+		let r = this.heap.allocate(size);
+		trace!(target: "runtime-io", "malloc {} bytes at {}", size, r);
+		Ok(r)
+	},
+	ext_free(addr: *mut u8) => {
+		this.heap.deallocate(addr);
+		trace!(target: "runtime-io", "free {}", addr);
+		Ok(())
+	},
+	ext_set_storage(key_data: *const u8, key_len: u32, value_data: *const u8, value_len: u32) => {
+		let key = this.memory.get(key_data, key_len as usize).map_err(|_| DummyUserError)?;
+		let value = this.memory.get(value_data, value_len as usize).map_err(|_| DummyUserError)?;
+		if let Some(preimage) = this.hash_lookup.get(&key) {
+			info!(target: "wasm-trace", "*** Setting storage: %{} -> {}   [k={}]", ascii_format(&preimage), HexDisplay::from(&value), HexDisplay::from(&key));
+		} else {
+			info!(target: "wasm-trace", "*** Setting storage:  {} -> {}   [k={}]", ascii_format(&key), HexDisplay::from(&value), HexDisplay::from(&key));
+		}
+		this.ext.set_storage(key, value);
+		Ok(())
+	},
+	ext_clear_storage(key_data: *const u8, key_len: u32) => {
+		let key = this.memory.get(key_data, key_len as usize).map_err(|_| DummyUserError)?;
+		if let Some(preimage) = this.hash_lookup.get(&key) {
+			info!(target: "wasm-trace", "*** Clearing storage: %{}   [k={}]", ascii_format(&preimage), HexDisplay::from(&key));
+		} else {
+			info!(target: "wasm-trace", "*** Clearing storage:  {}   [k={}]", ascii_format(&key), HexDisplay::from(&key));
+		}
+		this.ext.clear_storage(&key);
+		Ok(())
+	},
+	// return 0 and place u32::max_value() into written_out if no value exists for the key.
+	ext_get_allocated_storage(key_data: *const u8, key_len: u32, written_out: *mut u32) -> *mut u8 => {
+		let key = this.memory.get(key_data, key_len as usize).map_err(|_| DummyUserError)?;
+		let maybe_value = this.ext.storage(&key);
+
+		if let Some(preimage) = this.hash_lookup.get(&key) {
+			info!(target: "wasm-trace", "    Getting storage: %{} == {}   [k={}]", ascii_format(&preimage), if let Some(ref b) = maybe_value { format!("{}", HexDisplay::from(b)) } else { "<empty>".to_owned() }, HexDisplay::from(&key));
+		} else {
+			info!(target: "wasm-trace", "    Getting storage:  {} == {}   [k={}]", ascii_format(&key), if let Some(ref b) = maybe_value { format!("{}", HexDisplay::from(b)) } else { "<empty>".to_owned() }, HexDisplay::from(&key));
+		}
+
+		if let Some(value) = maybe_value {
+			let offset = this.heap.allocate(value.len() as u32) as u32;
+			this.memory.set(offset, &value).map_err(|_| DummyUserError)?;
+			this.memory.write_primitive(written_out, value.len() as u32)?;
+			Ok(offset)
+		} else {
+			this.memory.write_primitive(written_out, u32::max_value())?;
+			Ok(0)
+		}
+	},
+	// return u32::max_value() if no value exists for the key.
+	ext_get_storage_into(key_data: *const u8, key_len: u32, value_data: *mut u8, value_len: u32, value_offset: u32) -> u32 => {
+		let key = this.memory.get(key_data, key_len as usize).map_err(|_| DummyUserError)?;
+		let maybe_value = this.ext.storage(&key);
+		if let Some(preimage) = this.hash_lookup.get(&key) {
+			info!(target: "wasm-trace", "    Getting storage: %{} == {}   [k={}]", ascii_format(&preimage), if let Some(ref b) = maybe_value { format!("{}", HexDisplay::from(b)) } else { "<empty>".to_owned() }, HexDisplay::from(&key));
+		} else {
+			info!(target: "wasm-trace", "    Getting storage:  {} == {}   [k={}]", ascii_format(&key), if let Some(ref b) = maybe_value { format!("{}", HexDisplay::from(b)) } else { "<empty>".to_owned() }, HexDisplay::from(&key));
+		}
+		if let Some(value) = maybe_value {
+			let value = &value[value_offset as usize..];
+			let written = ::std::cmp::min(value_len as usize, value.len());
+			this.memory.set(value_data, &value[..written]).map_err(|_| DummyUserError)?;
+			Ok(written as u32)
+		} else {
+			Ok(u32::max_value())
+		}
+	},
+	ext_storage_root(result: *mut u8) => {
+		let r = this.ext.storage_root();
+		this.memory.set(result, &r[..]).map_err(|_| DummyUserError)?;
+		Ok(())
+	},
+	ext_enumerated_trie_root(values_data: *const u8, lens_data: *const u32, lens_len: u32, result: *mut u8) => {
+		let values = (0..lens_len)
+			.map(|i| this.memory.read_primitive(lens_data + i * 4))
+			.collect::<::std::result::Result<Vec<u32>, DummyUserError>>()?
+			.into_iter()
+			.scan(0u32, |acc, v| { let o = *acc; *acc += v; Some((o, v)) })
+			.map(|(offset, len)|
+				this.memory.get(values_data + offset, len as usize)
+					.map_err(|_| DummyUserError)
+			)
+			.collect::<::std::result::Result<Vec<_>, DummyUserError>>()?;
+		let r = ordered_trie_root(values.into_iter());
+		this.memory.set(result, &r[..]).map_err(|_| DummyUserError)?;
+		Ok(())
+	},
+	ext_chain_id() -> u64 => {
+		Ok(this.ext.chain_id())
+	},
+	ext_twox_128(data: *const u8, len: u32, out: *mut u8) => {
+		let result = if len == 0 {
+			let hashed = twox_128(&[0u8; 0]);
+			trace!(target: "xxhash", "XXhash: '' -> {}", HexDisplay::from(&hashed));
+			this.hash_lookup.insert(hashed.to_vec(), vec![]);
+			hashed
+		} else {
+			let key = this.memory.get(data, len as usize).map_err(|_| DummyUserError)?;
+			let hashed_key = twox_128(&key);
+			if let Ok(skey) = ::std::str::from_utf8(&key) {
+				trace!(target: "xxhash", "XXhash: {} -> {}", skey, HexDisplay::from(&hashed_key));
+			} else {
+				trace!(target: "xxhash", "XXhash: {} -> {}", HexDisplay::from(&key), HexDisplay::from(&hashed_key));
+			}
+			this.hash_lookup.insert(hashed_key.to_vec(), key);
+			hashed_key
+		};
+
+		this.memory.set(out, &result).map_err(|_| DummyUserError)?;
+		Ok(())
+	},
+	ext_twox_256(data: *const u8, len: u32, out: *mut u8) => {
+		let result = if len == 0 {
+			twox_256(&[0u8; 0])
+		} else {
+			twox_256(&this.memory.get(data, len as usize).map_err(|_| DummyUserError)?)
+		};
+		this.memory.set(out, &result).map_err(|_| DummyUserError)?;
+		Ok(())
+	},
+	ext_blake2_256(data: *const u8, len: u32, out: *mut u8) => {
+		let result = if len == 0 {
+			blake2_256(&[0u8; 0])
+		} else {
+			blake2_256(&this.memory.get(data, len as usize).map_err(|_| DummyUserError)?)
+		};
+		this.memory.set(out, &result).map_err(|_| DummyUserError)?;
+		Ok(())
+	},
+	ext_ed25519_verify(msg_data: *const u8, msg_len: u32, sig_data: *const u8, pubkey_data: *const u8) -> u32 => {
+		let mut sig = [0u8; 64];
+		this.memory.get_into(sig_data, &mut sig[..]).map_err(|_| DummyUserError)?;
+		let mut pubkey = [0u8; 32];
+		this.memory.get_into(pubkey_data, &mut pubkey[..]).map_err(|_| DummyUserError)?;
+		let msg = this.memory.get(msg_data, msg_len as usize).map_err(|_| DummyUserError)?;
+
+		Ok(if ::ed25519::verify(&sig, &msg, &pubkey) {
+			0
+		} else {
+			5
+		})
+	},
+	ext_sandbox_new() -> u32 => {
+		Ok(this.sandbox_store.new_sandbox())
+	},
+	ext_sandbox_instantiate(sandbox_id: u32, wasm_ptr: *const u8, wasm_len: usize) -> u32 => {
+		let wasm = this.memory.get(wasm_ptr, wasm_len as usize).map_err(|_| DummyUserError)?;
+
+		let sandbox = this.sandbox_store.sandboxes.get_mut(sandbox_id as usize).ok_or_else(|| DummyUserError)?;
+
+		// TODO: Remove unwraps and asserts.
+		let module = Module::from_buffer(wasm).unwrap();
+		let instance = ModuleInstance::new(
+			&module,
+			sandbox
+		).unwrap().assert_no_start();
+
+		sandbox.instances.push(instance);
+		let instance_idx = sandbox.instances.len() - 1;
+
+		Ok(instance_idx as u32)
+	},
+	ext_sandbox_invoke(sandbox_id: u32, instance_id: u32, export_ptr: *const u8, export_len: usize) -> u32 => {
+		println!("ext_sandbox_invoke, sandbox_id={}", sandbox_id);
+		let export = this.memory.get(export_ptr, export_len as usize)
+			.map_err(|_| DummyUserError)
+			.and_then(|b|
+				String::from_utf8(b)
+					.map_err(|_| DummyUserError)
+			)?;
+
+		let instance = {
+			let sandbox = this.sandbox_store.sandboxes.get_mut(sandbox_id as usize).ok_or_else(|| DummyUserError)?;
+			sandbox.instances.get(instance_id as usize).ok_or_else(|| DummyUserError)?.clone()
+		};
+
+		let original_memory = this.memory.clone();
+		let mut call_externals = SandboxCallExternals {
+			original_externals: this,
+			original_memory,
+			sandbox_id,
+		};
+
+		// TODO: Error handling
+		let _result = instance.invoke_export(&export, &[], &mut call_externals).unwrap();
+
+		Ok(0)
+	},
+	ext_sandbox_register_closure(
+		sandbox_id: u32,
+		module_name_ptr: *const u8,
+		module_name_len: usize,
+		field_name_ptr: *const u8,
+		field_name_len: usize,
+		user_data: *const u8,
+		fn_ptr: u32) =>
+	{
+		let module_name = this.memory.get(module_name_ptr, module_name_len as usize).map_err(|_| DummyUserError)?;
+		let field_name = this.memory.get(field_name_ptr, field_name_len as usize).map_err(|_| DummyUserError)?;
+
+		println!(
+			"ext_sandbox_register_closure, sandbox_id={}, module_name={:?}, field_name={:?}",
+			sandbox_id,
+			String::from_utf8_lossy(&module_name),
+			String::from_utf8_lossy(&field_name),
+		);
+
+		let func_ref = this.table.get(fn_ptr).map_err(|_| DummyUserError)?.ok_or_else(|| DummyUserError)?;
+
+		let sandbox = this.sandbox_store.sandboxes.get_mut(sandbox_id as usize).ok_or_else(|| DummyUserError)?;
+		sandbox.raw_closures.push(RawClosure {
+			user_data_offset: user_data,
+			func_ref,
+		});
+
+		let raw_closure_idx = sandbox.raw_closures.len() - 1;
+		sandbox.registered_funcs.insert((module_name, field_name), raw_closure_idx);
+
+		Ok(())
+	},
+	ext_sandbox_register_memory(
+		sandbox_id: u32,
+		module_name_ptr: *const u8,
+		module_name_len: usize,
+		field_name_ptr: *const u8,
+		field_name_len: usize,
+		memory_id: u32
+	) => {
+		let module_name = this.memory.get(module_name_ptr, module_name_len as usize).map_err(|_| DummyUserError)?;
+		let field_name = this.memory.get(field_name_ptr, field_name_len as usize).map_err(|_| DummyUserError)?;
+
+		let memref = this.sandbox_store.memories.get(memory_id as usize).ok_or_else(|| DummyUserError)?.clone();
+
+		let sandbox = this.sandbox_store.sandboxes.get_mut(sandbox_id as usize).ok_or_else(|| DummyUserError)?;
+		sandbox.registered_memories.insert((module_name, field_name), memref);
+
+		Ok(())
+	},
+	ext_sandbox_memory_new(initial: u32, maximum: u32) -> u32 => {
+		let maximum = if maximum == u32::max_value() {
+			None
+		} else {
+			Some(maximum)
+		};
+		Ok(this.sandbox_store.new_memory(initial, maximum))
+	},
+	ext_sandbox_memory_get(memory_id: u32, offset: u32, buf_ptr: *mut u8, buf_len: usize) => {
+		let memory = this.sandbox_store.memories.get(memory_id as usize).ok_or_else(|| DummyUserError)?;
+
+		let tmp: Vec<u8> = memory.get(offset, buf_len as usize).map_err(|_| DummyUserError)?;
+		this.memory.set(buf_ptr, &tmp).map_err(|_| DummyUserError)?;
+
+		Ok(())
+	},
+	ext_sandbox_memory_set(memory_id: u32, offset: u32, val_ptr: *const u8, val_len: usize) => {
+		let memory = this.sandbox_store.memories.get(memory_id as usize).ok_or_else(|| DummyUserError)?;
+
+		let tmp = this.memory.get(offset, val_len as usize).map_err(|_| DummyUserError)?;
+		memory.set(val_ptr, &tmp).map_err(|_| DummyUserError)?;
+
+		Ok(())
 	},
 	=> <'e, E: Externalities + 'e>
 );
