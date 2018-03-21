@@ -120,18 +120,19 @@ impl<'a, 'e: 'a, E: Externalities + 'e> Externals for SandboxCallExternals<'a, '
 		}
 
 		// Allocate space for and copy the marshalled arguments into the memory.
-
-		// TODO: Fix this shit!
-		// We should really allocate this in the memory.
-		let invoke_args_ptr = 588_000;
-		self.original_memory.set(invoke_args_ptr, &invoke_args_data);
+		let invoke_args_ptr = self.original_externals.heap.allocate(invoke_args_data.len() as u32);
+		self.original_memory.set(invoke_args_ptr, &invoke_args_data).unwrap();
 
 		let mut invoke_args = Vec::new();
 		invoke_args.push(RuntimeValue::I32(user_data_offset as i32));
 		invoke_args.push(RuntimeValue::I32(invoke_args_ptr as i32));
 		invoke_args.push(RuntimeValue::I32(args.len() as i32));
 
-		::wasmi::FuncInstance::invoke(&func_ref, invoke_args.as_ref(), self.original_externals)
+		let result = ::wasmi::FuncInstance::invoke(&func_ref, invoke_args.as_ref(), self.original_externals);
+
+		self.original_externals.heap.deallocate(invoke_args_ptr);
+
+		result
 	}
 }
 
