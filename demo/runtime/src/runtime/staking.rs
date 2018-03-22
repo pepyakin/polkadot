@@ -702,6 +702,7 @@ mod tests {
 	use demo_primitives::AccountId;
 	use runtime::{staking, session};
 	use runtime::democracy::PrivPass;
+	use runtime::staking::private::DirectAccountDb;
 	use runtime::staking::public::{Call, Dispatch};
 	use runtime::staking::privileged::{Call as PCall, Dispatch as PDispatch};
 
@@ -1019,68 +1020,64 @@ mod tests {
 
 	#[test]
 	fn contract_transfer() {
-		let one = Keyring::One.to_raw_public();
-		let two = Keyring::Two.to_raw_public();
-		let three = [0xAAu8; 32];
+		let eve = [0xAAu8; 32];
 
 		let mut t: TestExternalities = map![
-			twox_128(&one.to_keyed_vec(BALANCE_OF)).to_vec() => vec![].and(&111u64),
-			twox_128(&two.to_keyed_vec(BALANCE_OF)).to_vec() => vec![].and(&0u64),
-			twox_128(&two.to_keyed_vec(CODE_OF)).to_vec() => TRANSFER_WASM.to_vec(),
-			twox_128(&three.to_keyed_vec(BALANCE_OF)).to_vec() => vec![].and(&30u64)
+			twox_128(TransactionFee::key()).to_vec() => vec![].and(&0u64),
+			twox_128(&FreeBalanceOf::key_for(*Alice)).to_vec() => vec![].and(&111u64),
+			twox_128(&FreeBalanceOf::key_for(*Bob)).to_vec() => vec![].and(&0u64),
+			twox_128(&CodeOf::key_for(*Bob)).to_vec() => TRANSFER_WASM.to_vec().encode(),
+			twox_128(&FreeBalanceOf::key_for(eve)).to_vec() => vec![].and(&30u64)
 		];
 
 		with_externalities(&mut t, || {
 			// Contract at the address `two` sends 6 units of the balance
 			// to account at address `three`.
-			transfer(&one, &two, 11);
+			PublicPass::new(&Alice).transfer(Bob.to_raw_public(), 11);
 
-			assert_eq!(balance(&one), 100);
-			assert_eq!(balance(&two), 5);
-			assert_eq!(balance(&three), 36);
+			assert_eq!(FreeBalanceOf::get(*Alice), 100);
+			assert_eq!(FreeBalanceOf::get(*Bob), 5);
+			assert_eq!(FreeBalanceOf::get(eve), 36);
 		});
 	}
 
 	#[test]
 	fn contract_create() {
-		let one = Keyring::One.to_raw_public();
-		let two = Keyring::Two.to_raw_public();
-		let created = derive_contract_address(&two, TRANSFER_WASM);
+		let created = private::derive_contract_address(&Bob, TRANSFER_WASM);
 
 		let mut t: TestExternalities = map![
-			twox_128(&one.to_keyed_vec(BALANCE_OF)).to_vec() => vec![].and(&111u64),
-			twox_128(&two.to_keyed_vec(BALANCE_OF)).to_vec() => vec![].and(&0u64),
-			twox_128(&two.to_keyed_vec(CODE_OF)).to_vec() => CREATE_WASM.to_vec()
+			twox_128(TransactionFee::key()).to_vec() => vec![].and(&0u64),
+			twox_128(&FreeBalanceOf::key_for(*Alice)).to_vec() => vec![].and(&111u64),
+			twox_128(&FreeBalanceOf::key_for(*Bob)).to_vec() => vec![].and(&0u64),
+			twox_128(&CodeOf::key_for(*Bob)).to_vec() => CREATE_WASM.to_vec().encode()
 		];
 
 		with_externalities(&mut t, || {
 			// When invoked, the contract at address `two` must create the 'transfer' contract.
-			transfer(&one, &two, 11);
+			PublicPass::new(&Alice).transfer(Bob.to_raw_public(), 11);
 
-			assert_eq!(balance(&one), 100);
-			assert_eq!(balance(&two), 8);
-			assert_eq!(balance(&created), 3);
+			assert_eq!(FreeBalanceOf::get(*Alice), 100);
+			assert_eq!(FreeBalanceOf::get(*Bob), 8);
+			assert_eq!(FreeBalanceOf::get(created), 3);
 		});
 	}
 
 	#[test]
 	fn contract_storage() {
-		let one = Keyring::One.to_raw_public();
-		let two = Keyring::Two.to_raw_public();
-
 		let mut t: TestExternalities = map![
-			twox_128(&one.to_keyed_vec(BALANCE_OF)).to_vec() => vec![].and(&111u64),
-			twox_128(&two.to_keyed_vec(BALANCE_OF)).to_vec() => vec![].and(&0u64),
-			twox_128(&two.to_keyed_vec(CODE_OF)).to_vec() => ADDER_WASM.to_vec()
+			twox_128(TransactionFee::key()).to_vec() => vec![].and(&0u64),
+			twox_128(&FreeBalanceOf::key_for(*Alice)).to_vec() => vec![].and(&111u64),
+			twox_128(&FreeBalanceOf::key_for(*Bob)).to_vec() => vec![].and(&0u64),
+			twox_128(&CodeOf::key_for(*Bob)).to_vec() => ADDER_WASM.to_vec().encode()
 		];
 
 		with_externalities(&mut t, || {
 			// When invoked, the contract should increment the storage at the address 1.
-			transfer(&one, &two, 1);
-			transfer(&one, &two, 1);
+			PublicPass::new(&Alice).transfer(Bob.to_raw_public(), 1);
+			PublicPass::new(&Alice).transfer(Bob.to_raw_public(), 1);
 
 			let storage_addr = [0x01u8; 32];
-			let value = DirectAccountDb.get_storage(&two, &storage_addr).unwrap();
+			let value = private::AccountDb::get_storage(&private::DirectAccountDb, &Bob, &storage_addr).unwrap();
 
 			assert_eq!(
 				&value,
