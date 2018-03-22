@@ -20,10 +20,13 @@ use rstd::prelude::*;
 use runtime_support::storage::unhashed::StorageVec;
 use demo_primitives::SessionKey;
 
+pub const AUTHORITY_AT: &'static[u8] = b":auth:";
+pub const AUTHORITY_COUNT: &'static[u8] = b":auth:len";
+
 struct AuthorityStorageVec {}
 impl StorageVec for AuthorityStorageVec {
 	type Item = SessionKey;
-	const PREFIX: &'static[u8] = b":auth:";
+	const PREFIX: &'static[u8] = AUTHORITY_AT;
 }
 
 /// Get the current set of authorities. These are the session keys.

@@ -19,69 +19,62 @@
 
 use rstd::prelude::*;
 use codec::KeyedVec;
-use runtime_support::{storage, StorageVec};
+use runtime_support::{storage, StorageValue, StorageMap};
 use demo_primitives::{AccountId, SessionKey, BlockNumber};
 use runtime::{system, staking, consensus};
+use runtime::democracy::PrivPass;
+use runtime::staking::PublicPass;
 
-const SESSION_LENGTH: &[u8] = b"ses:len";
-const CURRENT_INDEX: &[u8] = b"ses:ind";
-const LAST_LENGTH_CHANGE: &[u8] = b"ses:llc";
-const NEXT_KEY_FOR: &[u8] = b"ses:nxt:";
-const NEXT_SESSION_LENGTH: &[u8] = b"ses:nln";
+storage_items!{
+	// The current set of validators.
+	pub Validators get(validators): b"ses:val" => required Vec<AccountId>;
+	// Current length of the session.
+	pub SessionLength get(length): b"ses:len" => required BlockNumber;
+	// Current index of the session.
+	pub CurrentIndex get(current_index): b"ses:ind" => required BlockNumber;
 
-struct ValidatorStorageVec {}
-impl StorageVec for ValidatorStorageVec {
-	type Item = AccountId;
-	const PREFIX: &'static[u8] = b"ses:val:";
-}
-
-/// Get the current set of validators.
-pub fn validators() -> Vec<AccountId> {
-	ValidatorStorageVec::items()
-}
-
-/// The number of blocks in each session.
-pub fn length() -> BlockNumber {
-	storage::get_or(SESSION_LENGTH, 0)
+	// Block at which the session length last changed.
+	LastLengthChange: b"ses:llc" => default BlockNumber;
+	// The next key for a given validator.
+	NextKeyFor: b"ses:nxt:" => map [ AccountId => SessionKey ];
+	// The next session length.
+	NextSessionLength: b"ses:nln" => BlockNumber;
 }
 
 /// The number of validators currently.
 pub fn validator_count() -> u32 {
-	ValidatorStorageVec::count() as u32
+	Validators::get().len() as u32	// TODO: can probably optimised
 }
 
-/// The current era index.
-pub fn current_index() -> BlockNumber {
-	storage::get_or(CURRENT_INDEX, 0)
+impl_dispatch! {
+	pub mod public;
+	fn set_key(key: SessionKey) = 0;
 }
 
-/// The block number at which the era length last changed.
-pub fn last_length_change() -> BlockNumber {
-	storage::get_or(LAST_LENGTH_CHANGE, 0)
-}
-
-pub mod public {
-	use super::*;
-
+impl<'a> public::Dispatch for PublicPass<'a> {
 	/// Sets the session key of `_validator` to `_key`. This doesn't take effect until the next
 	/// session.
-	pub fn set_key(validator: &AccountId, key: &SessionKey) {
+	fn set_key(self, key: SessionKey) {
 		// set new value for next session
-		storage::put(&validator.to_keyed_vec(NEXT_KEY_FOR), key);
+		NextKeyFor::insert(*self, key)
 	}
 }
 
-pub mod privileged {
-	use super::*;
+impl_dispatch! {
+	pub mod privileged;
+	fn set_length(new: BlockNumber) = 0;
+	fn force_new_session() = 1;
+}
 
+impl privileged::Dispatch for PrivPass {
 	/// Set a new era length. Won't kick in until the next era change (at current length).
-	pub fn set_length(new: BlockNumber) {
-		storage::put(NEXT_SESSION_LENGTH, &new);
+	fn set_length(self, new: BlockNumber) {
+		NextSessionLength::put(new);
 	}
 
 	/// Forces a new session.
-	pub fn force_new_session() {
-		rotate_session();
+	fn force_new_session(self) {
+		internal::rotate_session();
 	}
 }
 
@@ -92,10 +85,10 @@ pub mod internal {
 
 	/// Set the current set of validators.
 	///
-	/// Called by staking::next_era() only. `next_session` should be called after this in order to
+	/// Called by `staking::next_era()` only. `next_session` should be called after this in order to
 	/// update the session keys to the next validator set.
 	pub fn set_validators(new: &[AccountId]) {
-		ValidatorStorageVec::set_items(new);
+		Validators::put(&new.to_vec());			// TODO: optimise.
 		consensus::internal::set_authorities(new);
 	}
 
@@ -104,53 +97,69 @@ pub mod internal {
 		// do this last, after the staking system has had chance to switch out the authorities for the
 		// new set.
 		// check block number and call next_session if necessary.
-		if (system::block_number() - last_length_change()) % length() == 0 {
+		if (system::block_number() - LastLengthChange::get()) % length() == 0 {
 			rotate_session();
 		}
 	}
+
+	/// Move onto next session: register the new authority set.
+	pub fn rotate_session() {
+		// Increment current session index.
+		CurrentIndex::put(CurrentIndex::get() + 1);
+
+		// Enact era length change.
+		if let Some(next_len) = NextSessionLength::take() {
+			SessionLength::put(next_len);
+			LastLengthChange::put(system::block_number());
+		}
+
+		// Update any changes in session keys.
+		validators().iter().enumerate().for_each(|(i, v)| {
+			if let Some(n) = NextKeyFor::take(v) {
+				consensus::internal::set_authority(i as u32, &n);
+			}
+		});
+	}
 }
 
-/// Move onto next session: register the new authority set.
-fn rotate_session() {
-	// Increment current session index.
-	storage::put(CURRENT_INDEX, &(current_index() + 1));
+#[cfg(any(feature = "std", test))]
+pub mod testing {
+	use super::*;
+	use runtime_io::{twox_128, TestExternalities};
+	use codec::{Joiner, KeyedVec};
+	use keyring::Keyring::*;
+	use runtime::system;
 
-	// Enact era length change.
-	if let Some(next_len) = storage::get::<u64>(NEXT_SESSION_LENGTH) {
-		storage::put(SESSION_LENGTH, &next_len);
-		storage::put(LAST_LENGTH_CHANGE, &system::block_number());
-		storage::kill(NEXT_SESSION_LENGTH);
+	pub fn externalities(session_length: u64) -> TestExternalities {
+		let three = [3u8; 32];
+
+		let extras: TestExternalities = map![
+			twox_128(SessionLength::key()).to_vec() => vec![].and(&session_length),
+			twox_128(CurrentIndex::key()).to_vec() => vec![].and(&0u64),
+			twox_128(Validators::key()).to_vec() => vec![].and(&vec![One.into(), Two.into(), three])
+		];
+		system::testing::externalities().into_iter().chain(extras.into_iter()).collect()
 	}
-
-	// Update any changes in session keys.
-	validators().iter().enumerate().for_each(|(i, v)| {
-		let k = v.to_keyed_vec(NEXT_KEY_FOR);
-		if let Some(n) = storage::take(&k) {
-			consensus::internal::set_authority(i as u32, &n);
-		}
-	});
 }
 
 #[cfg(test)]
 mod tests {
 	use super::*;
 	use super::public::*;
-	use super::privileged::*;
+	use super::privileged::Dispatch as PrivDispatch;
 	use super::internal::*;
 	use runtime_io::{with_externalities, twox_128, TestExternalities};
 	use codec::{KeyedVec, Joiner};
 	use keyring::Keyring;
-	use environment::with_env;
 	use demo_primitives::AccountId;
 	use runtime::{consensus, session};
 
 	fn simple_setup() -> TestExternalities {
 		map![
-			twox_128(SESSION_LENGTH).to_vec() => vec![].and(&2u64),
+			twox_128(SessionLength::key()).to_vec() => vec![].and(&2u64),
+			twox_128(CurrentIndex::key()).to_vec() => vec![].and(&0u64),
 			// the validators (10, 20, ...)
-			twox_128(b"ses:val:len").to_vec() => vec![].and(&2u32),
-			twox_128(&0u32.to_keyed_vec(ValidatorStorageVec::PREFIX)).to_vec() => vec![10; 32],
-			twox_128(&1u32.to_keyed_vec(ValidatorStorageVec::PREFIX)).to_vec() => vec![20; 32],
+			twox_128(Validators::key()).to_vec() => vec![].and(&vec![[10u8; 32], [20; 32]]),
 			// initial session keys (11, 21, ...)
 			b":auth:len".to_vec() => vec![].and(&2u32),
 			0u32.to_keyed_vec(b":auth:") => vec![11; 32],
@@ -173,46 +182,46 @@ mod tests {
 		let mut t = simple_setup();
 		with_externalities(&mut t, || {
 			// Block 1: Change to length 3; no visible change.
-			with_env(|e| e.block_number = 1);
-			set_length(3);
+			system::testing::set_block_number(1);
+			PrivPass::test().set_length(3);
 			check_rotate_session();
 			assert_eq!(length(), 2);
 			assert_eq!(current_index(), 0);
 
 			// Block 2: Length now changed to 3. Index incremented.
-			with_env(|e| e.block_number = 2);
-			set_length(3);
+			system::testing::set_block_number(2);
+			PrivPass::test().set_length(3);
 			check_rotate_session();
 			assert_eq!(length(), 3);
 			assert_eq!(current_index(), 1);
 
 			// Block 3: Length now changed to 3. Index incremented.
-			with_env(|e| e.block_number = 3);
+			system::testing::set_block_number(3);
 			check_rotate_session();
 			assert_eq!(length(), 3);
 			assert_eq!(current_index(), 1);
 
 			// Block 4: Change to length 2; no visible change.
-			with_env(|e| e.block_number = 4);
-			set_length(2);
+			system::testing::set_block_number(4);
+			PrivPass::test().set_length(2);
 			check_rotate_session();
 			assert_eq!(length(), 3);
 			assert_eq!(current_index(), 1);
 
 			// Block 5: Length now changed to 2. Index incremented.
-			with_env(|e| e.block_number = 5);
+			system::testing::set_block_number(5);
 			check_rotate_session();
 			assert_eq!(length(), 2);
 			assert_eq!(current_index(), 2);
 
 			// Block 6: No change.
-			with_env(|e| e.block_number = 6);
+			system::testing::set_block_number(6);
 			check_rotate_session();
 			assert_eq!(length(), 2);
 			assert_eq!(current_index(), 2);
 
 			// Block 7: Next index.
-			with_env(|e| e.block_number = 7);
+			system::testing::set_block_number(7);
 			check_rotate_session();
 			assert_eq!(length(), 2);
 			assert_eq!(current_index(), 3);
@@ -224,25 +233,25 @@ mod tests {
 		let mut t = simple_setup();
 		with_externalities(&mut t, || {
 			// Block 1: No change
-			with_env(|e| e.block_number = 1);
+			system::testing::set_block_number(1);
 			check_rotate_session();
 			assert_eq!(consensus::authorities(), vec![[11u8; 32], [21u8; 32]]);
 
 			// Block 2: Session rollover, but no change.
-			with_env(|e| e.block_number = 2);
+			system::testing::set_block_number(2);
 			check_rotate_session();
 			assert_eq!(consensus::authorities(), vec![[11u8; 32], [21u8; 32]]);
 
 			// Block 3: Set new key for validator 2; no visible change.
-			with_env(|e| e.block_number = 3);
-			set_key(&[20; 32], &[22; 32]);
+			system::testing::set_block_number(3);
+			PublicPass::test(&[20; 32]).set_key([22; 32]);
 			assert_eq!(consensus::authorities(), vec![[11u8; 32], [21u8; 32]]);
 
 			check_rotate_session();
 			assert_eq!(consensus::authorities(), vec![[11u8; 32], [21u8; 32]]);
 
 			// Block 4: Session rollover, authority 2 changes.
-			with_env(|e| e.block_number = 4);
+			system::testing::set_block_number(4);
 			check_rotate_session();
 			assert_eq!(consensus::authorities(), vec![[11u8; 32], [22u8; 32]]);
 		});

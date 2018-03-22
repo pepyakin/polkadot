@@ -21,7 +21,6 @@ use primitives::bytes;
 use primitives::H256;
 use rstd::vec::Vec;
 use codec::{Input, Slicable};
-use transaction::UncheckedTransaction;
 
 pub use primitives::block::Id;
 
@@ -30,9 +29,6 @@ pub type Number = u64;
 
 /// Hash used to refer to a block hash.
 pub type HeaderHash = H256;
-
-/// Hash used to refer to a transaction hash.
-pub type TransactionHash = H256;
 
 /// Execution log (event)
 #[derive(PartialEq, Eq, Clone)]
@@ -69,38 +65,7 @@ impl Slicable for Digest {
 	}
 }
 
-/// The block "body": A bunch of transactions.
-pub type Body = Vec<UncheckedTransaction>;
-
-/// A Polkadot relay chain block.
-#[derive(PartialEq, Eq, Clone)]
-#[cfg_attr(feature = "std", derive(Serialize, Deserialize, Debug))]
-pub struct Block {
-	/// The block header.
-	pub header: Header,
-	/// All relay-chain transactions.
-	pub transactions: Body,
-}
-
-impl Slicable for Block {
-	fn decode<I: Input>(input: &mut I) -> Option<Self> {
-		let (header, transactions) = try_opt!(Slicable::decode(input));
-		Some(Block { header, transactions })
-	}
-
-	fn encode(&self) -> Vec<u8> {
-		let mut v = Vec::new();
-
-		v.extend(self.header.encode());
-		v.extend(self.transactions.encode());
-
-		v
-	}
-}
-
-/// A relay chain block header.
-///
-/// https://github.com/w3f/polkadot-spec/blob/master/spec.md#header
+/// Header for a block.
 #[derive(PartialEq, Eq, Clone)]
 #[cfg_attr(feature = "std", derive(Serialize, Deserialize, Debug))]
 #[cfg_attr(feature = "std", serde(rename_all = "camelCase"))]

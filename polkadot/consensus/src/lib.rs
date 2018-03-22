@@ -37,12 +37,16 @@ extern crate polkadot_api;
 extern crate polkadot_collator as collator;
 extern crate polkadot_statement_table as table;
 extern crate polkadot_primitives;
+extern crate polkadot_transaction_pool as transaction_pool;
 extern crate substrate_bft as bft;
 extern crate substrate_codec as codec;
 extern crate substrate_primitives as primitives;
 
 #[macro_use]
 extern crate error_chain;
+
+#[macro_use]
+extern crate log;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -54,8 +58,9 @@ use polkadot_api::{PolkadotApi, BlockBuilder};
 use polkadot_primitives::{Hash, Timestamp};
 use polkadot_primitives::block::Block as PolkadotBlock;
 use polkadot_primitives::parachain::{Id as ParaId, DutyRoster, BlockData, Extrinsic, CandidateReceipt};
-use primitives::block::{Block as SubstrateBlock, Header as SubstrateHeader, HeaderHash, Id as BlockId};
+use primitives::block::{Block as SubstrateBlock, Header as SubstrateHeader, HeaderHash, Id as BlockId, Number as BlockNumber};
 use primitives::AuthorityId;
+use transaction_pool::{Ready, TransactionPool};
 
 use futures::prelude::*;
 use futures::future;
@@ -64,6 +69,9 @@ use parking_lot::Mutex;
 pub use self::error::{ErrorKind, Error};
 
 mod error;
+
+// block size limit.
+const MAX_TRANSACTIONS_SIZE: usize = 4 * 1024 * 1024;
 
 /// A handle to a statement table router.
 pub trait TableRouter {
@@ -455,6 +463,8 @@ fn make_group_info(roster: DutyRoster, authorities: &[AuthorityId]) -> Result<Ha
 pub struct ProposerFactory<C, N> {
 	/// The client instance.
 	pub client: Arc<C>,
+	/// The transaction pool.
+	pub transaction_pool: Arc<Mutex<TransactionPool>>,
 	/// The backing network handle.
 	pub network: N,
 }
@@ -465,18 +475,24 @@ impl<C: PolkadotApi, N: Network> bft::ProposerFactory for ProposerFactory<C, N> 
 
 	fn init(&self, parent_header: &SubstrateHeader, authorities: &[AuthorityId], sign_with: Arc<ed25519::Pair>) -> Result<Self::Proposer, Error> {
 		let parent_hash = parent_header.hash();
-		let duty_roster = self.client.duty_roster(&BlockId::Hash(parent_hash))?;
+
+		let checked_id = self.client.check_id(BlockId::Hash(parent_hash))?;
+		let duty_roster = self.client.duty_roster(&checked_id)?;
 
 		let group_info = make_group_info(duty_roster, authorities)?;
-		let table = Arc::new(SharedTable::new(group_info, sign_with, parent_hash));
+		let table = Arc::new(SharedTable::new(group_info, sign_with.clone(), parent_hash));
 		let router = self.network.table_router(table.clone());
 
 		// TODO [PoC-2]: kick off collation process.
 		Ok(Proposer {
 			parent_hash,
+			parent_number: parent_header.number,
+			parent_id: checked_id,
+			local_key: sign_with,
+			client: self.client.clone(),
+			transaction_pool: self.transaction_pool.clone(),
 			_table: table,
 			_router: router,
-			client: self.client.clone(),
 		})
 	}
 }
@@ -490,9 +506,13 @@ fn current_timestamp() -> Timestamp {
 }
 
 /// The Polkadot proposer logic.
-pub struct Proposer<C, R> {
+pub struct Proposer<C: PolkadotApi, R> {
 	parent_hash: HeaderHash,
+	parent_number: BlockNumber,
+	parent_id: C::CheckedBlockId,
 	client: Arc<C>,
+	local_key: Arc<ed25519::Pair>,
+	transaction_pool: Arc<Mutex<TransactionPool>>,
 	_table: Arc<SharedTable>,
 	_router: R,
 }
@@ -504,13 +524,42 @@ impl<C: PolkadotApi, R: TableRouter> bft::Proposer for Proposer<C, R> {
 
 	fn propose(&self) -> Result<SubstrateBlock, Error> {
 		// TODO: handle case when current timestamp behind that in state.
-		let polkadot_block = self.client.build_block(
-			&BlockId::Hash(self.parent_hash),
+		let mut block_builder = self.client.build_block(
+			&self.parent_id,
 			current_timestamp()
-		)?.bake();
+		)?;
 
-		// TODO: integrate transaction queue and `push_transaction`s.
+		let readiness_evaluator = Ready::create(self.parent_id.clone(), &*self.client);
 
+		{
+			let mut pool = self.transaction_pool.lock();
+			let mut unqueue_invalid = Vec::new();
+			let mut pending_size = 0;
+			for pending in pool.pending(readiness_evaluator.clone()) {
+				// skip and cull transactions which are too large.
+				if pending.encoded_size() > MAX_TRANSACTIONS_SIZE {
+					unqueue_invalid.push(pending.hash().clone());
+					continue
+				}
+
+				if pending_size + pending.encoded_size() >= MAX_TRANSACTIONS_SIZE { break }
+
+				match block_builder.push_transaction(pending.as_transaction().clone()) {
+					Ok(()) => {
+						pending_size += pending.encoded_size();
+					}
+					Err(_) => {
+						unqueue_invalid.push(pending.hash().clone());
+					}
+				}
+			}
+
+			for tx_hash in unqueue_invalid {
+				pool.remove(&tx_hash, false);
+			}
+		}
+
+		let polkadot_block = block_builder.bake();
 		let substrate_block = Slicable::decode(&mut polkadot_block.encode().as_slice())
 			.expect("polkadot blocks defined to serialize to substrate blocks correctly; qed");
 
@@ -519,7 +568,66 @@ impl<C: PolkadotApi, R: TableRouter> bft::Proposer for Proposer<C, R> {
 
 	// TODO: certain kinds of errors here should lead to a misbehavior report.
 	fn evaluate(&self, proposal: &SubstrateBlock) -> Result<bool, Error> {
-		evaluate_proposal(proposal, &*self.client, current_timestamp(), &self.parent_hash)
+		evaluate_proposal(proposal, &*self.client, current_timestamp(), &self.parent_hash, &self.parent_id)
+	}
+
+	fn import_misbehavior(&self, misbehavior: Vec<(AuthorityId, bft::Misbehavior)>) {
+		use bft::generic::Misbehavior as GenericMisbehavior;
+		use primitives::bft::{MisbehaviorKind, MisbehaviorReport};
+		use polkadot_primitives::transaction::{Function, Transaction, UncheckedTransaction};
+
+		let local_id = self.local_key.public().0;
+		let mut pool = self.transaction_pool.lock();
+		let mut next_nonce = {
+			let readiness_evaluator = Ready::create(self.parent_id.clone(), &*self.client);
+
+			let cur_nonce = pool.pending(readiness_evaluator)
+				.filter(|tx| tx.as_transaction().transaction.signed == local_id)
+				.last()
+				.map(|tx| Ok(tx.as_transaction().transaction.nonce))
+				.unwrap_or_else(|| self.client.nonce(&self.parent_id, local_id));
+
+			match cur_nonce {
+				Ok(cur_nonce) => cur_nonce + 1,
+				Err(e) => {
+					warn!(target: "consensus", "Error computing next transaction nonce: {}", e);
+					return;
+				}
+			}
+		};
+
+		for (target, misbehavior) in misbehavior {
+			let report = MisbehaviorReport {
+				parent_hash: self.parent_hash,
+				parent_number: self.parent_number,
+				target,
+				misbehavior: match misbehavior {
+					GenericMisbehavior::ProposeOutOfTurn(_, _, _) => continue,
+					GenericMisbehavior::DoublePropose(_, _, _) => continue,
+					GenericMisbehavior::DoublePrepare(round, (h1, s1), (h2, s2))
+						=> MisbehaviorKind::BftDoublePrepare(round as u32, (h1, s1.signature), (h2, s2.signature)),
+					GenericMisbehavior::DoubleCommit(round, (h1, s1), (h2, s2))
+						=> MisbehaviorKind::BftDoubleCommit(round as u32, (h1, s1.signature), (h2, s2.signature)),
+				}
+			};
+
+			let tx = Transaction {
+				signed: local_id,
+				nonce: next_nonce,
+				function: Function::ReportMisbehavior(report),
+			};
+
+			next_nonce += 1;
+
+			let message = tx.encode();
+			let signature = self.local_key.sign(&message);
+			let tx = UncheckedTransaction {
+				transaction: tx,
+				signature,
+			};
+
+			pool.import(tx).expect("locally signed transaction is valid; qed");
+		}
 	}
 }
 
@@ -528,12 +636,21 @@ fn evaluate_proposal<C: PolkadotApi>(
 	client: &C,
 	now: Timestamp,
 	parent_hash: &HeaderHash,
+	parent_id: &C::CheckedBlockId,
 ) -> Result<bool, Error> {
 	const MAX_TIMESTAMP_DRIFT: Timestamp = 4;
 
 	let encoded = Slicable::encode(proposal);
 	let proposal = PolkadotBlock::decode(&mut &encoded[..])
 		.ok_or_else(|| ErrorKind::ProposalNotForPolkadot)?;
+
+	let transactions_size = proposal.body.transactions.iter().fold(0, |a, tx| {
+		a + Slicable::encode(tx).len()
+	});
+
+	if transactions_size > MAX_TRANSACTIONS_SIZE {
+		bail!(ErrorKind::ProposalTooLarge(transactions_size))
+	}
 
 	if proposal.header.parent_hash != *parent_hash {
 		bail!(ErrorKind::WrongParentHash(*parent_hash, proposal.header.parent_hash));
@@ -551,6 +668,6 @@ fn evaluate_proposal<C: PolkadotApi>(
 	}
 
 	// execute the block.
-	client.evaluate_block(&BlockId::Hash(*parent_hash), proposal)?;
+	client.evaluate_block(parent_id, proposal)?;
 	Ok(true)
 }

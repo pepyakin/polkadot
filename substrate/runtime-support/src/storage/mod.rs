@@ -17,8 +17,11 @@
 //! Stuff to do with the runtime's storage.
 
 use rstd::prelude::*;
+use rstd::borrow::Borrow;
 use runtime_io::{self, twox_128};
 use codec::{Slicable, KeyedVec, Input};
+
+pub mod generator;
 
 // TODO: consider using blake256 to avoid possible preimage attack.
 
@@ -44,7 +47,7 @@ pub fn get<T: Slicable + Sized>(key: &[u8]) -> Option<T> {
 			key: &key[..],
 			pos: 0,
 		};
-		Slicable::decode(&mut input).expect("stroage is not null, therefore must be a valid type")
+		Slicable::decode(&mut input).expect("storage is not null, therefore must be a valid type")
 	})
 }
 
@@ -119,8 +122,210 @@ pub fn put_raw(key: &[u8], value: &[u8]) {
 	runtime_io::set_storage(&twox_128(key)[..], value)
 }
 
+/// The underlying runtime storage.
+pub struct RuntimeStorage;
+
+impl ::GenericStorage for RuntimeStorage {
+	fn exists(&self, key: &[u8]) -> bool {
+		super::storage::exists(key)
+	}
+
+	/// Load the bytes of a key from storage. Can panic if the type is incorrect.
+	fn get<T: Slicable>(&self, key: &[u8]) -> Option<T> {
+		super::storage::get(key)
+	}
+
+	/// Put a value in under a key.
+	fn put<T: Slicable>(&self, key: &[u8], val: &T) {
+		super::storage::put(key, val)
+	}
+
+	/// Remove the bytes of a key from storage.
+	fn kill(&self, key: &[u8]) {
+		super::storage::kill(key)
+	}
+
+	/// Take a value from storage, deleting it after reading.
+	fn take<T: Slicable>(&self, key: &[u8]) -> Option<T> {
+		super::storage::take(key)
+	}
+}
+
+/// A trait for working with macro-generated storage values under the substrate storage API.
+pub trait StorageValue<T: Slicable> {
+	/// The type that get/take return.
+	type Query;
+
+	/// Get the storage key.
+	fn key() -> &'static [u8];
+
+	/// Does the value (explicitly) exist in storage?
+	fn exists() -> bool;
+
+	/// Load the value from the provided storage instance.
+	fn get() -> Self::Query;
+
+	/// Store a value under this key into the provded storage instance.
+	fn put<Arg: Borrow<T>>(val: Arg);
+
+	/// Clear the storage value.
+	fn kill();
+
+	/// Take a value from storage, removing it afterwards.
+	fn take() -> Self::Query;
+}
+
+impl<T: Slicable, U> StorageValue<T> for U where U: generator::StorageValue<T> {
+	type Query = U::Query;
+
+	fn key() -> &'static [u8] {
+		<U as generator::StorageValue<T>>::key()
+	}
+	fn exists() -> bool {
+		U::exists(&RuntimeStorage)
+	}
+	fn get() -> Self::Query {
+		U::get(&RuntimeStorage)
+	}
+	fn put<Arg: Borrow<T>>(val: Arg) {
+		U::put(val.borrow(), &RuntimeStorage)
+	}
+	fn kill() {
+		U::kill(&RuntimeStorage)
+	}
+	fn take() -> Self::Query {
+		U::take(&RuntimeStorage)
+	}
+}
+
+/// A strongly-typed list in storage.
+pub trait StorageList<T: Slicable> {
+	/// Get the prefix key in storage.
+	fn prefix() -> &'static [u8];
+
+	/// Get the key used to store the length field.
+	fn len_key() -> Vec<u8>;
+
+	/// Get the storage key used to fetch a value at a given index.
+	fn key_for(index: u32) -> Vec<u8>;
+
+	/// Read out all the items.
+	fn items() -> Vec<T>;
+
+	/// Set the current set of items.
+	fn set_items(items: &[T]);
+
+	/// Set the item at the given index.
+	fn set_item<Arg: Borrow<T>>(index: u32, val: Arg);
+
+	/// Load the value at given index. Returns `None` if the index is out-of-bounds.
+	fn get(index: u32) -> Option<T>;
+
+	/// Load the length of the list
+	fn len() -> u32;
+
+	/// Clear the list.
+	fn clear();
+}
+
+impl<T: Slicable, U> StorageList<T> for U where U: generator::StorageList<T> {
+	fn prefix() -> &'static [u8] {
+		<U as generator::StorageList<T>>::prefix()
+	}
+
+	fn len_key() -> Vec<u8> {
+		<U as generator::StorageList<T>>::len_key()
+	}
+
+	fn key_for(index: u32) -> Vec<u8> {
+		<U as generator::StorageList<T>>::key_for(index)
+	}
+
+	fn items() -> Vec<T> {
+		U::items(&RuntimeStorage)
+	}
+
+	fn set_items(items: &[T]) {
+		U::set_items(items, &RuntimeStorage)
+	}
+
+	fn set_item<Arg: Borrow<T>>(index: u32, val: Arg) {
+		U::set_item(index, val.borrow(), &RuntimeStorage)
+	}
+
+	fn get(index: u32) -> Option<T> {
+		U::get(index, &RuntimeStorage)
+	}
+
+	fn len() -> u32 {
+		U::len(&RuntimeStorage)
+	}
+
+	fn clear() {
+		U::clear(&RuntimeStorage)
+	}
+}
+
+/// A strongly-typed map in storage.
+pub trait StorageMap<K: Slicable, V: Slicable> {
+	/// The type that get/take return.
+	type Query;
+
+	/// Get the prefix key in storage.
+	fn prefix() -> &'static [u8];
+
+	/// Get the storage key used to fetch a value corresponding to a specific key.
+	fn key_for<KeyArg: Borrow<K>>(key: KeyArg) -> Vec<u8>;
+
+	/// Does the value (explicitly) exist in storage?
+	fn exists<KeyArg: Borrow<K>>(key: KeyArg) -> bool;
+
+	/// Load the value associated with the given key from the map.
+	fn get<KeyArg: Borrow<K>>(key: KeyArg) -> Self::Query;
+
+	/// Store a value to be associated with the given key from the map.
+	fn insert<KeyArg: Borrow<K>, ValArg: Borrow<V>>(key: KeyArg, val: ValArg);
+
+	/// Remove the value under a key.
+	fn remove<KeyArg: Borrow<K>>(key: KeyArg);
+
+	/// Take the value under a key.
+	fn take<KeyArg: Borrow<K>>(key: KeyArg) -> Self::Query;
+}
+
+impl<K: Slicable, V: Slicable, U> StorageMap<K, V> for U where U: generator::StorageMap<K, V> {
+	type Query = U::Query;
+
+	fn prefix() -> &'static [u8] {
+		<U as generator::StorageMap<K, V>>::prefix()
+	}
+
+	fn key_for<KeyArg: Borrow<K>>(key: KeyArg) -> Vec<u8> {
+		<U as generator::StorageMap<K, V>>::key_for(key.borrow())
+	}
+
+	fn exists<KeyArg: Borrow<K>>(key: KeyArg) -> bool {
+		U::exists(key.borrow(), &RuntimeStorage)
+	}
+
+	fn get<KeyArg: Borrow<K>>(key: KeyArg) -> Self::Query {
+		U::get(key.borrow(), &RuntimeStorage)
+	}
+
+	fn insert<KeyArg: Borrow<K>, ValArg: Borrow<V>>(key: KeyArg, val: ValArg) {
+		U::insert(key.borrow(), val.borrow(), &RuntimeStorage)
+	}
+
+	fn remove<KeyArg: Borrow<K>>(key: KeyArg) {
+		U::remove(key.borrow(), &RuntimeStorage)
+	}
+
+	fn take<KeyArg: Borrow<K>>(key: KeyArg) -> Self::Query {
+		U::take(key.borrow(), &RuntimeStorage)
+	}
+}
+
 /// A trait to conveniently store a vector of storable data.
-// TODO: add iterator support
 pub trait StorageVec {
 	type Item: Default + Sized + Slicable;
 	const PREFIX: &'static [u8];
@@ -131,9 +336,26 @@ pub trait StorageVec {
 	}
 
 	/// Set the current set of items.
-	fn set_items(items: &[Self::Item]) {
-		Self::set_count(items.len() as u32);
-		items.iter().enumerate().for_each(|(v, ref i)| Self::set_item(v as u32, i));
+	fn set_items<I, T>(items: I)
+		where
+			I: IntoIterator<Item=T>,
+			T: Borrow<Self::Item>,
+	{
+		let mut count: u32 = 0;
+
+		for i in items.into_iter() {
+			put(&count.to_keyed_vec(Self::PREFIX), i.borrow());
+			count = count.checked_add(1).expect("exceeded runtime storage capacity");
+		}
+
+		Self::set_count(count);
+	}
+
+	/// Push an item.
+	fn push(item: &Self::Item) {
+		let len = Self::count();
+		put(&len.to_keyed_vec(Self::PREFIX), item);
+		Self::set_count(len + 1);
 	}
 
 	fn set_item(index: u32, item: &Self::Item) {
@@ -163,6 +385,7 @@ pub trait StorageVec {
 }
 
 pub mod unhashed {
+	use rstd::borrow::Borrow;
 	use super::{runtime_io, Slicable, KeyedVec, Vec, IncrementalInput};
 
 	/// Return the value of the item in storage under `key`, or `None` if there is no explicit entry.
@@ -247,7 +470,6 @@ pub mod unhashed {
 	}
 
 	/// A trait to conveniently store a vector of storable data.
-	// TODO: add iterator support
 	pub trait StorageVec {
 		type Item: Default + Sized + Slicable;
 		const PREFIX: &'static [u8];
@@ -258,9 +480,19 @@ pub mod unhashed {
 		}
 
 		/// Set the current set of items.
-		fn set_items(items: &[Self::Item]) {
-			Self::set_count(items.len() as u32);
-			items.iter().enumerate().for_each(|(v, ref i)| Self::set_item(v as u32, i));
+		fn set_items<I, T>(items: I)
+			where
+				I: IntoIterator<Item=T>,
+				T: Borrow<Self::Item>,
+		{
+			let mut count: u32 = 0;
+
+			for i in items.into_iter() {
+				put(&count.to_keyed_vec(Self::PREFIX), i.borrow());
+				count = count.checked_add(1).expect("exceeded runtime storage capacity");
+			}
+
+			Self::set_count(count);
 		}
 
 		fn set_item(index: u32, item: &Self::Item) {
@@ -293,8 +525,7 @@ pub mod unhashed {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use primitives::hexdisplay::HexDisplay;
-	use runtime_io::{storage, twox_128, TestExternalities, with_externalities};
+	use runtime_io::{twox_128, TestExternalities, with_externalities};
 
 	#[test]
 	fn integers_can_be_stored() {
@@ -337,7 +568,6 @@ mod tests {
 		with_externalities(&mut t, || {
 			runtime_io::set_storage(&twox_128(b":test"), b"\x0b\0\0\0Hello world");
 			let x = b"Hello world".to_vec();
-			println!("Hex: {}", HexDisplay::from(&storage(&twox_128(b":test")).unwrap()));
 			let y = get::<Vec<u8>>(b":test").unwrap();
 			assert_eq!(x, y);
 
@@ -353,9 +583,7 @@ mod tests {
 			put(b":test", &x);
 		});
 
-		println!("Ext is {:?}", t);
 		with_externalities(&mut t, || {
-			println!("Hex: {}", HexDisplay::from(&storage(&twox_128(b":test")).unwrap()));
 			let y: Vec<u8> = get(b":test").unwrap();
 			assert_eq!(x, y);
 		});
