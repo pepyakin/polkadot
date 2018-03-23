@@ -455,7 +455,17 @@ mod private {
 		// TODO: Inspect the binary to extract the initial page count.
 		let memory: RefCell<sandbox::Memory> = RefCell::new(sandbox::Memory::new(1, None));
 
-		let ext_put_storage = |args: &[sandbox::Value]| {
+		// ext_put_storage(location_ptr: u32, value_non_null: u32, value_ptr: u32);
+		//
+		// Change the value at the given location or remove it.
+		//
+		// - location_ptr: pointer into the linear
+		// memory where the location of the requested value is placed.
+		// - value_non_null: if set to 0, then the entry
+		// at the given location will be removed.
+		// - value_ptr: pointer into the linear memory
+		// where the value to set is placed. If `value_non_null` is set to 0, then this parameter is ignored.
+		let ext_set_storage = |args: &[sandbox::Value]| {
 			let location_ptr = args[0].as_i32() as u32;
 			let value_non_null = args[1].as_i32() as u32;
 			let value_ptr = args[2].as_i32() as u32;
@@ -472,8 +482,15 @@ mod private {
 			}
 		};
 
+		// ext_get_storage(location_ptr: u32, dest_ptr: u32);
+		//
+		// Retrieve the value at the given location from the strorage.
+		// If there is no entry at the given location then all-zero-value
+		// will be returned.
+		//
+		// - location_ptr: pointer into the linear
+		// memory where the location of the requested value is placed.
 		let ext_get_storage = |args: &[sandbox::Value]| {
-			// ext_get_storage(location_ptr: u32, dest_ptr: u32);
 			let location_ptr = args[0].as_i32() as u32;
 			let dest_ptr = args[1].as_i32() as u32;
 
@@ -487,14 +504,11 @@ mod private {
 			}
 		};
 
+		// TODO(ser): `value` isn't an u32 but u64. u32 is used because
+		// we not yet support.
+		// ext_transfer(transfer_to: u32, value: u32)
 		let ext_transfer = |args: &[sandbox::Value]| {
-			print(1337);
-			print(args[0].as_i32() as u64);
-			print(args[1].as_i32() as u64);
-
-			// ext_transfer(transfer_to: u32, value: u32)
 			let transfer_to_ptr = args[0].as_i32() as u32;
-			// TODO: This isn't a u32 but u64. But oh well...
 			let value = args[1].as_i32() as u64;
 
 			let mut transfer_to = [0; 32];
@@ -504,7 +518,7 @@ mod private {
 			if let Some(commit_state) = effect_transfer(account, &transfer_to, value, overlay) {
 				account_db.merge(commit_state);
 			}
-			// TODO: Trap?
+			// TODO(ser): Trap
 		};
 
 		let ext_create = |args: &[sandbox::Value]| {
@@ -521,25 +535,12 @@ mod private {
 			if let Some(commit_state) = effect_create(account, &code, value as u64, overlay) {
 				account_db.merge(commit_state);
 			}
-			// TODO: Trap?
+			// TODO(ser): Trap
 		};
 
-		// let ext_debug = |args: &[sandbox::Value]| {
-		// 	// ext_debug(msg_ptr: u32, msg_len: u32)
-		// 	let msg_ptr = args[0].as_i32() as u32;
-		// 	let msg_len = args[1].as_i32() as u32;
-
-		// 	let mut msg = Vec::new();
-		// 	msg.resize(msg_len as usize, 0u8);
-		// 	memory.borrow().get(msg_ptr, &mut msg);
-
-		// 	println!("debug({:?}) = {:?}", args, msg);
-		// };
-
 		// TODO: Signatures.
-		// TODO: Rename ext_put_storage -> ext_set_storage.
 		let mut sandbox = sandbox::Sandbox::new();
-		sandbox.register_closure("env", "ext_put_storage", &ext_put_storage);
+		sandbox.register_closure("env", "ext_set_storage", &ext_set_storage);
 		sandbox.register_closure("env", "ext_get_storage", &ext_get_storage);
 		sandbox.register_closure("env", "ext_transfer", &ext_transfer);
 		sandbox.register_closure("env", "ext_create", &ext_create);
@@ -1020,7 +1021,7 @@ mod tests {
 
 	#[test]
 	fn contract_transfer() {
-		let eve = [0xAAu8; 32];
+		let eve: [u8; 32] = [0xaa; 32];
 
 		let mut t: TestExternalities = map![
 			twox_128(TransactionFee::key()).to_vec() => vec![].and(&0u64),
