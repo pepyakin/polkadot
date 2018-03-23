@@ -106,7 +106,6 @@ impl SandboxInstance {
 		if raw_result == 0 {
 			Ok(())
 		} else {
-			// TODO:
 			Err(Error::Trap)
 		}
 	}

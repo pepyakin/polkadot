@@ -518,7 +518,7 @@ mod private {
 			if let Some(commit_state) = effect_transfer(account, &transfer_to, value, overlay) {
 				account_db.merge(commit_state);
 			}
-			// TODO(ser): Trap
+			// TODO(ser): Trap or result.
 		};
 
 		let ext_create = |args: &[sandbox::Value]| {
@@ -535,7 +535,7 @@ mod private {
 			if let Some(commit_state) = effect_create(account, &code, value as u64, overlay) {
 				account_db.merge(commit_state);
 			}
-			// TODO(ser): Trap
+			// TODO(ser): Trap or result.
 		};
 
 		// TODO: Signatures.
