@@ -1044,8 +1044,6 @@ mod tests {
 
 	#[test]
 	fn contract_create() {
-		let created = private::derive_contract_address(&Bob, TRANSFER_WASM);
-
 		let mut t: TestExternalities = map![
 			twox_128(TransactionFee::key()).to_vec() => vec![].and(&0u64),
 			twox_128(&FreeBalanceOf::key_for(*Alice)).to_vec() => vec![].and(&111u64),
@@ -1056,6 +1054,10 @@ mod tests {
 		with_externalities(&mut t, || {
 			// When invoked, the contract at address `two` must create the 'transfer' contract.
 			PublicPass::new(&Alice).transfer(Bob.to_raw_public(), 11);
+			let created = private::derive_contract_address(
+				&Bob,
+				TRANSFER_WASM
+			);
 
 			assert_eq!(FreeBalanceOf::get(*Alice), 100);
 			assert_eq!(FreeBalanceOf::get(*Bob), 8);
