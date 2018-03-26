@@ -1015,9 +1015,9 @@ mod tests {
 		});
 	}
 
-	const TRANSFER_WASM: &[u8] = include_bytes!("../../wasm-tests/bin/transfer.wasm");
-	const CREATE_WASM: &[u8] = include_bytes!("../../wasm-tests/bin/create.wasm");
-	const ADDER_WASM: &[u8] = include_bytes!("../../wasm-tests/bin/adder.wasm");
+	const TRANSFER_WASM: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "wasm-tests/bin/transfer.wasm"));
+	const CREATE_WASM: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "wasm-tests/bin/create.wasm"));
+	const ADDER_WASM: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "wasm-tests/bin/adder.wasm"));
 
 	#[test]
 	fn contract_transfer() {

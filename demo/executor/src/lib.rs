@@ -273,7 +273,9 @@ mod tests {
 		});
 	}
 
-	const TRANSFER_WASM: &[u8] = include_bytes!("/Users/pepyakin/dev/parity/temp/polkadot-demo-initial-contracts/transfer.wasm");
+	const TRANSFER_WASM: &[u8] = include_bytes!(
+		concat!(env!("CARGO_MANIFEST_DIR"), "/../runtime/wasm-tests/bin/transfer.wasm")
+	);
 
 	#[test]
 	fn wasm_test() {
