@@ -1015,9 +1015,9 @@ mod tests {
 		});
 	}
 
-	const TRANSFER_WASM: &[u8] = include_bytes!("/Users/pepyakin/dev/parity/temp/polkadot-demo-initial-contracts/transfer.wasm");
-	const CREATE_WASM: &[u8] = include_bytes!("/Users/pepyakin/dev/parity/temp/polkadot-demo-initial-contracts/create.wasm");
-	const ADDER_WASM: &[u8] = include_bytes!("/Users/pepyakin/dev/parity/temp/polkadot-demo-initial-contracts/adder.wasm");
+	const TRANSFER_WASM: &[u8] = include_bytes!("../../wasm-tests/bin/transfer.wasm");
+	const CREATE_WASM: &[u8] = include_bytes!("../../wasm-tests/bin/create.wasm");
+	const ADDER_WASM: &[u8] = include_bytes!("../../wasm-tests/bin/adder.wasm");
 
 	#[test]
 	fn contract_transfer() {
