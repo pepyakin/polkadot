@@ -635,7 +635,7 @@ impl CodeExecutor for WasmExecutor {
         // TODO: unwrap -> to expect
         let table = intermediate_instance.not_started_instance().export_by_name("table").unwrap().as_table().unwrap().clone();
 
-		let mut fec = FunctionExecutor::new(memory.clone(), table.clone(), ext)?;
+		let mut fec = FunctionExecutor::new(memory.clone(), table, ext)?;
 
 		// finish instantiation by running 'start' function (if any).
 		let instance = intermediate_instance.run_start(&mut fec)?;
