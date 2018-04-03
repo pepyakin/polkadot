@@ -487,7 +487,7 @@ mod private {
 		// at the given location will be removed.
 		// - value_ptr: pointer into the linear memory
 		// where the value to set is placed. If `value_non_null` is set to 0, then this parameter is ignored.
-		let ext_set_storage = |args: &[sandbox::Value]| {
+		let ext_set_storage: fn(&[sandbox::Value]) = |args: &[sandbox::Value]| {
 			let location_ptr = args[0].as_i32() as u32;
 			let value_non_null = args[1].as_i32() as u32;
 			let value_ptr = args[2].as_i32() as u32;
@@ -501,9 +501,9 @@ mod private {
 				if value_non_null != 0 {
 					let mut value = [0; 32];
 					e.memory().get(value_ptr, &mut value);
-					e.account_db().set_storage(account, location.to_vec(), Some(value.to_vec()));
+					e.account_db().set_storage(e.account(), location.to_vec(), Some(value.to_vec()));
 				} else {
-					e.account_db().set_storage(account, location.to_vec(), None);
+					e.account_db().set_storage(e.account(), location.to_vec(), None);
 				}
 			});
 			assert!(called);
@@ -517,7 +517,7 @@ mod private {
 		//
 		// - location_ptr: pointer into the linear
 		// memory where the location of the requested value is placed.
-		let ext_get_storage = |args: &[sandbox::Value]| {
+		let ext_get_storage: fn(&[sandbox::Value]) = |args: &[sandbox::Value]| {
 			let location_ptr = args[0].as_i32() as u32;
 			let dest_ptr = args[1].as_i32() as u32;
 
@@ -527,7 +527,7 @@ mod private {
 				let mut location = [0; 32];
 				e.memory().get(location_ptr, &mut location);
 
-				if let Some(value) = account_db.get_storage(account, &location) {
+				if let Some(value) = e.account_db().get_storage(e.account(), &location) {
 					e.memory().set(dest_ptr, &value);
 				} else {
 					e.memory().set(dest_ptr, &[0u8; 32]);
@@ -539,7 +539,7 @@ mod private {
 		// TODO(ser): `value` isn't an u32 but u64. u32 is used because
 		// we not yet support.
 		// ext_transfer(transfer_to: u32, value: u32)
-		let ext_transfer = |args: &[sandbox::Value]| {
+		let ext_transfer: fn(&[sandbox::Value]) = |args: &[sandbox::Value]| {
 			let transfer_to_ptr = args[0].as_i32() as u32;
 			let value = args[1].as_i32() as u64;
 
@@ -550,15 +550,15 @@ mod private {
 				e.memory().get(transfer_to_ptr, &mut transfer_to);
 
 				let overlay = OverlayAccountDb::new(e.account_db());
-				if let Some(commit_state) = effect_transfer(account, &transfer_to, value, overlay) {
-					account_db.merge(commit_state);
+				if let Some(commit_state) = effect_transfer(e.account(), &transfer_to, value, overlay) {
+					e.account_db().merge(commit_state);
 				}
 			});
 			assert!(called);
 			// TODO(ser): Trap or result.
 		};
 
-		let ext_create = |args: &[sandbox::Value]| {
+		let ext_create: fn(&[sandbox::Value]) = |args: &[sandbox::Value]| {
 			// ext_create(code_ptr: u32, code_len: u32, value: u32)
 			let code_ptr = args[0].as_i32() as u32;
 			let code_len = args[1].as_i32() as u32;
@@ -573,7 +573,7 @@ mod private {
 				e.memory().get(code_ptr, &mut code);
 
 				let overlay = OverlayAccountDb::new(e.account_db());
-				if let Some(commit_state) = effect_create(account, &code, value as u64, overlay) {
+				if let Some(commit_state) = effect_create(e.account(), &code, value as u64, overlay) {
 					e.account_db().merge(commit_state);
 				}
 			});
