@@ -585,19 +585,19 @@ mod private {
 		let memory = sandbox::Memory::new(1, None);
 
 		// TODO: Signatures.
-		let mut sandbox = sandbox::Sandbox::new();
-		sandbox.register_closure("env", "ext_set_storage", &ext_set_storage);
-		sandbox.register_closure("env", "ext_get_storage", &ext_get_storage);
-		sandbox.register_closure("env", "ext_transfer", &ext_transfer);
-		sandbox.register_closure("env", "ext_create", &ext_create);
+		let mut imports = sandbox::Imports::new();
+		imports.add_host_func("env", "ext_set_storage", ext_set_storage);
+		imports.add_host_func("env", "ext_get_storage", ext_get_storage);
+		imports.add_host_func("env", "ext_transfer", ext_transfer);
+		imports.add_host_func("env", "ext_create", ext_create);
 		// TODO: ext_balance
 		// TODO: ext_address
 		// TODO: ext_callvalue
 		// TODO: ext_panic
 		// sandbox.register_closure("env", "ext_debug", &ext_debug);
-		sandbox.register_memory("env", "memory", memory.clone());
+		imports.add_memory("env", "memory", memory.clone());
 
-		let instance = sandbox.instantiate(code);
+		let mut instance = sandbox::Instance::new(code, &imports);
 
 		let mut exec_ext = ExecutionExt {
 			account,
@@ -605,7 +605,7 @@ mod private {
 			memory,
 		};
 		ext::using(&mut exec_ext, || {
-			instance.invoke(&mut sandbox, "call").is_ok()
+			instance.invoke(b"call", &[]).is_ok()
 		})
 	}
 }

@@ -26,93 +26,7 @@ use wasmi::{
 };
 use wasmi::memory_units::{Pages};
 
-pub struct SandboxInstance {
-	instance: ModuleRef,
-}
-
-impl SandboxInstance {
-	pub fn invoke(&self, sandbox: &mut Sandbox, export: &str) -> Result<(), Error> {
-		let result = self.instance.invoke_export(export, &[], sandbox);
-
-		//
-		match result {
-			Ok(_) => Ok(()),
-			Err(_err) => Err(Error::Trap),
-		}
-	}
-}
-
-pub struct Sandbox<'a> {
-	// TODO: Refactor
-	wrappers: Vec<&'a Fn(&[Value])>,
-	registered_funcs: HashMap<(String, String), usize>,
-	memories: Vec<Memory>,
-	registered_memories: HashMap<(String, String), usize>,
-}
-
-impl<'a> Externals for Sandbox<'a> {
-	fn invoke_index(
-		&mut self,
-		index: usize,
-		args: RuntimeArgs,
-	) -> Result<Option<RuntimeValue>, Trap> {
-		let args = args.as_ref().iter().map(|arg| match *arg {
-			RuntimeValue::I32(v) => Value::I32(v),
-			_ => panic!("Unsupported type!"),
-		}).collect::<Vec<_>>();
-
-		(self.wrappers[index])(&args);
-		Ok(None)
-	}
-}
-
-impl<'a> ImportResolver for Sandbox<'a> {
-	fn resolve_func(
-		&self,
-		module_name: &str,
-		field_name: &str,
-		signature: &Signature,
-	) -> Result<FuncRef, wasmi::Error> {
-		let key = (module_name.to_string(), field_name.to_string());
-		let idx = *self.registered_funcs.get(&key).ok_or_else(||
-			wasmi::Error::Instantiation(format!("Export {}:{} not found", module_name, field_name))
-		)?;
-		Ok(FuncInstance::alloc_host(signature.clone(), idx))
-	}
-
-	fn resolve_global(
-		&self,
-		_module_name: &str,
-		_field_name: &str,
-		_global_type: &GlobalDescriptor,
-	) -> Result<GlobalRef, wasmi::Error> {
-		// TODO:
-		unimplemented!()
-	}
-
-	fn resolve_memory(
-		&self,
-		module_name: &str,
-		field_name: &str,
-		_memory_type: &MemoryDescriptor,
-	) -> Result<MemoryRef, wasmi::Error> {
-		let key = (module_name.to_string(), field_name.to_string());
-		let idx = *self.registered_memories.get(&key).ok_or_else(||
-			wasmi::Error::Instantiation(format!("Export {}:{} not found", module_name, field_name))
-		)?;
-		Ok(self.memories[idx].memref.clone())
-	}
-
-	fn resolve_table(
-		&self,
-		_module_name: &str,
-		_field_name: &str,
-		_table_type: &TableDescriptor,
-	) -> Result<TableRef, wasmi::Error> {
-		// TODO:
-		unimplemented!()
-	}
-}
+///
 
 #[derive(Clone)]
 pub struct Memory {
@@ -135,39 +49,149 @@ impl Memory {
 	}
 }
 
-impl<'a> Sandbox<'a> {
-	pub fn new() -> Sandbox<'a> {
-		Sandbox {
-			wrappers: Vec::new(),
-			memories: Vec::new(),
-			registered_funcs: HashMap::new(),
-			registered_memories: HashMap::new(),
+struct ImportsExternals {
+	funcs: Vec<fn(&[Value])>,
+}
+impl Externals for ImportsExternals {
+	fn invoke_index(
+		&mut self,
+		index: usize,
+		args: RuntimeArgs,
+	) -> Result<Option<RuntimeValue>, Trap> {
+		let args = args.as_ref().iter().map(|arg| match *arg {
+			RuntimeValue::I32(v) => Value::I32(v),
+			_ => panic!("Unsupported type!"),
+		}).collect::<Vec<_>>();
+
+		(self.funcs[index])(&args);
+		Ok(None)
+	}
+}
+
+struct ImportsAdapter<'a> {
+	// We can't point to FuncRef, since it's requires a function signature and
+	// we don't yet know it.
+	func_map: HashMap<(Vec<u8>, Vec<u8>), usize>,
+	imports: &'a Imports,
+	externals: ImportsExternals,
+}
+impl<'a> ImportsAdapter<'a> {
+	fn new(imports: &'a Imports) -> ImportsAdapter<'a> {
+		// Convert slice of imports into a Map of functions.
+		let mut externals = ImportsExternals {
+			funcs: Vec::new(),
+		};
+		let mut func_map = HashMap::new();
+		for (&(ref module_name, ref field_name), externval) in &imports.map {
+			if let ExternVal::HostFunc(ref f) = *externval {
+				let k = (module_name.to_owned(), field_name.to_owned());
+				let idx = externals.funcs.len();
+				externals.funcs.push(*f);
+				func_map.insert(k, idx);
+			}
+		}
+		ImportsAdapter {
+			func_map,
+			imports,
+			externals,
+		}
+	}
+	fn into_externals(self) -> ImportsExternals {
+		self.externals
+	}
+}
+impl<'a> ImportResolver for ImportsAdapter<'a> {
+	fn resolve_func(
+		&self,
+		module_name: &str,
+		field_name: &str,
+		signature: &Signature,
+	) -> Result<FuncRef, wasmi::Error> {
+		let key = (module_name.as_bytes().to_owned(), field_name.as_bytes().to_owned());
+		let func_idx = self.func_map.get(&key).ok_or_else(||
+			wasmi::Error::Instantiation(
+				format!("Export {}:{} not found or not a function", module_name, field_name)
+			)
+		)?.clone();
+		Ok(FuncInstance::alloc_host(signature.clone(), func_idx))
+	}
+
+	fn resolve_global(
+		&self,
+		_module_name: &str,
+		_field_name: &str,
+		_global_type: &GlobalDescriptor,
+	) -> Result<GlobalRef, wasmi::Error> {
+		// TODO:
+		unimplemented!()
+	}
+
+	fn resolve_memory(
+		&self,
+		module_name: &str,
+		field_name: &str,
+		_memory_type: &MemoryDescriptor,
+	) -> Result<MemoryRef, wasmi::Error> {
+		let key = (module_name.as_bytes().to_owned(), field_name.as_bytes().to_owned());
+		let externval = self.imports.map.get(&key).ok_or_else(||
+			wasmi::Error::Instantiation(format!("Export {}:{} not found", module_name, field_name))
+		)?;
+		let memory = match *externval {
+			ExternVal::Memory(ref m) => m,
+			_ => return Err(
+				wasmi::Error::Instantiation(format!("Export {}:{} is not a memory", module_name, field_name))
+			),
+		};
+		Ok(memory.memref.clone())
+	}
+
+	fn resolve_table(
+		&self,
+		_module_name: &str,
+		_field_name: &str,
+		_table_type: &TableDescriptor,
+	) -> Result<TableRef, wasmi::Error> {
+		// TODO:
+		unimplemented!()
+	}
+}
+
+pub struct InstanceImp {
+	instance: ModuleRef,
+	externals: ImportsExternals,
+}
+
+impl InstanceImp {
+	pub fn new(code: &[u8], imports: &Imports) -> InstanceImp {
+		// TODO: Return `Result`
+		// TODO: Support start
+		let module = Module::from_buffer(code).unwrap();
+
+		let imports_adapter = ImportsAdapter::new(imports);
+
+		let instance = ModuleInstance::new(
+			&module,
+			&imports_adapter,
+		).unwrap().assert_no_start();
+
+		let externals = imports_adapter.into_externals();
+
+		InstanceImp {
+			instance,
+			externals,
 		}
 	}
 
-	pub fn register_closure<F: Fn(&[Value])>(&mut self, module_name: &str, field_name: &str, f: &'a F) {
-		self.wrappers.push(f);
-		let f_idx = self.wrappers.len() - 1;
+	pub fn invoke(&mut self, name: &[u8], _args: &[Value]) -> Result<Option<Value>, Error> {
+		// TODO: Convert args into `RuntimeValue` and use it.
+		let name = String::from_utf8_lossy(name);
+		let result = self.instance.invoke_export(&*name, &[], &mut self.externals);
 
-		self.registered_funcs.insert((module_name.to_string(), field_name.to_string()), f_idx);
-	}
-
-	pub fn register_memory(&mut self, module_name: &str, field_name: &str, memory: Memory) {
-		self.memories.push(memory);
-		let mem_idx = self.memories.len() - 1;
-		self.registered_memories.insert((module_name.to_string(), field_name.to_string()), mem_idx);
-	}
-
-	// TODO: Return `Result`
-	pub fn instantiate(&mut self, wasm: &[u8]) -> SandboxInstance {
-		let module = Module::from_buffer(wasm).unwrap();
-		let instance = ModuleInstance::new(
-			&module,
-			self
-		).unwrap().assert_no_start();
-
-		SandboxInstance {
-			instance,
+		//
+		match result {
+			// TODO: Convert value
+			Ok(_) => Ok(None),
+			Err(_err) => Err(Error::Trap),
 		}
 	}
 }
