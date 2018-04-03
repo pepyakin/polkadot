@@ -256,6 +256,7 @@ name = "demo-runtime"
 version = "0.1.0"
 dependencies = [
  "demo-primitives 0.1.0",
+ "environmental 0.1.0",
  "hex-literal 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "integer-sqrt 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",

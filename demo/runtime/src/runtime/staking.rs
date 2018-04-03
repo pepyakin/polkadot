@@ -451,9 +451,31 @@ mod private {
 		}
 	}
 
+	trait Ext {
+		fn account(&self) -> &AccountId;
+		fn account_db(&self) -> &AccountDb;
+		fn memory(&self) -> &sandbox::Memory;
+	}
+
+	environmental!(ext: trait Ext);
+
 	fn execute<E: AccountDb>(code: &[u8], account: &AccountId, account_db: &E) -> bool {
-		// TODO: Inspect the binary to extract the initial page count.
-		let memory: RefCell<sandbox::Memory> = RefCell::new(sandbox::Memory::new(1, None));
+		struct ExecutionExt<'a, E: AccountDb + 'a> {
+			account_db: &'a E,
+			account: &'a AccountId,
+			memory: sandbox::Memory,
+		}
+		impl<'a, E: AccountDb> Ext for ExecutionExt<'a, E> {
+			fn account(&self) -> &AccountId {
+				self.account
+			}
+			fn account_db(&self) -> &AccountDb {
+				self.account_db
+			}
+			fn memory(&self) -> &sandbox::Memory {
+				&self.memory
+			}
+		}
 
 		// ext_put_storage(location_ptr: u32, value_non_null: u32, value_ptr: u32);
 		//
@@ -471,15 +493,20 @@ mod private {
 			let value_ptr = args[2].as_i32() as u32;
 
 			let mut location = [0; 32];
-			memory.borrow().get(location_ptr, &mut location);
+			let mut called = false;
+			ext::with(|e| {
+				called = true;
+				e.memory().get(location_ptr, &mut location);
 
-			if value_non_null != 0 {
-				let mut value = [0; 32];
-				memory.borrow().get(value_ptr, &mut value);
-				account_db.set_storage(account, location.to_vec(), Some(value.to_vec()));
-			} else {
-				account_db.set_storage(account, location.to_vec(), None);
-			}
+				if value_non_null != 0 {
+					let mut value = [0; 32];
+					e.memory().get(value_ptr, &mut value);
+					e.account_db().set_storage(account, location.to_vec(), Some(value.to_vec()));
+				} else {
+					e.account_db().set_storage(account, location.to_vec(), None);
+				}
+			});
+			assert!(called);
 		};
 
 		// ext_get_storage(location_ptr: u32, dest_ptr: u32);
@@ -494,14 +521,19 @@ mod private {
 			let location_ptr = args[0].as_i32() as u32;
 			let dest_ptr = args[1].as_i32() as u32;
 
-			let mut location = [0; 32];
-			memory.borrow().get(location_ptr, &mut location);
+			let mut called = false;
+			ext::with(|e| {
+				called = true;
+				let mut location = [0; 32];
+				e.memory().get(location_ptr, &mut location);
 
-			if let Some(value) = account_db.get_storage(account, &location) {
-				memory.borrow().set(dest_ptr, &value);
-			} else {
-				memory.borrow().set(dest_ptr, &[0u8; 32]);
-			}
+				if let Some(value) = account_db.get_storage(account, &location) {
+					e.memory().set(dest_ptr, &value);
+				} else {
+					e.memory().set(dest_ptr, &[0u8; 32]);
+				}
+			});
+			assert!(called);
 		};
 
 		// TODO(ser): `value` isn't an u32 but u64. u32 is used because
@@ -511,13 +543,18 @@ mod private {
 			let transfer_to_ptr = args[0].as_i32() as u32;
 			let value = args[1].as_i32() as u64;
 
-			let mut transfer_to = [0; 32];
-			memory.borrow().get(transfer_to_ptr, &mut transfer_to);
+			let mut called = false;
+			ext::with(|e| {
+				called = true;
+				let mut transfer_to = [0; 32];
+				e.memory().get(transfer_to_ptr, &mut transfer_to);
 
-			let overlay = OverlayAccountDb::new(account_db);
-			if let Some(commit_state) = effect_transfer(account, &transfer_to, value, overlay) {
-				account_db.merge(commit_state);
-			}
+				let overlay = OverlayAccountDb::new(e.account_db());
+				if let Some(commit_state) = effect_transfer(account, &transfer_to, value, overlay) {
+					account_db.merge(commit_state);
+				}
+			});
+			assert!(called);
 			// TODO(ser): Trap or result.
 		};
 
@@ -527,16 +564,25 @@ mod private {
 			let code_len = args[1].as_i32() as u32;
 			let value = args[2].as_i32() as u32;
 
-			let mut code = Vec::new();
-			code.resize(code_len as usize, 0u8);
-			memory.borrow().get(code_ptr, &mut code);
+			let mut called = false;
+			ext::with(|e| {
+				called = true;
 
-			let overlay = OverlayAccountDb::new(account_db);
-			if let Some(commit_state) = effect_create(account, &code, value as u64, overlay) {
-				account_db.merge(commit_state);
-			}
+				let mut code = Vec::new();
+				code.resize(code_len as usize, 0u8);
+				e.memory().get(code_ptr, &mut code);
+
+				let overlay = OverlayAccountDb::new(e.account_db());
+				if let Some(commit_state) = effect_create(account, &code, value as u64, overlay) {
+					e.account_db().merge(commit_state);
+				}
+			});
+			assert!(called);
 			// TODO(ser): Trap or result.
 		};
+
+		// TODO: Inspect the binary to extract the initial page count.
+		let memory = sandbox::Memory::new(1, None);
 
 		// TODO: Signatures.
 		let mut sandbox = sandbox::Sandbox::new();
@@ -549,11 +595,18 @@ mod private {
 		// TODO: ext_callvalue
 		// TODO: ext_panic
 		// sandbox.register_closure("env", "ext_debug", &ext_debug);
-		sandbox.register_memory("env", "memory", memory.borrow().clone());
+		sandbox.register_memory("env", "memory", memory.clone());
 
 		let instance = sandbox.instantiate(code);
 
-		instance.invoke(&mut sandbox, "call").is_ok()
+		let mut exec_ext = ExecutionExt {
+			account,
+			account_db,
+			memory,
+		};
+		ext::using(&mut exec_ext, || {
+			instance.invoke(&mut sandbox, "call").is_ok()
+		})
 	}
 }
 

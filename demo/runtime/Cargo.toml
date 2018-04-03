@@ -16,6 +16,7 @@ substrate-runtime-support = { path = "../../substrate/runtime-support" }
 substrate-runtime-sandbox = { path = "../../substrate/runtime-sandbox" }
 substrate-primitives = { path = "../../substrate/primitives" }
 substrate-keyring = { path = "../../substrate/keyring" }
+environmental = { path = "../../substrate/environmental" }
 demo-primitives = { path = "../primitives" }
 integer-sqrt = "0.1.0"
 

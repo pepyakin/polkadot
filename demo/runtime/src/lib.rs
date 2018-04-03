@@ -33,6 +33,8 @@ extern crate substrate_codec as codec;
 #[cfg(feature = "std")] #[macro_use] extern crate substrate_primitives as primitives;
 extern crate demo_primitives;
 
+#[macro_use] extern crate environmental;
+
 #[cfg(test)] #[macro_use] extern crate hex_literal;
 
 extern crate integer_sqrt;
