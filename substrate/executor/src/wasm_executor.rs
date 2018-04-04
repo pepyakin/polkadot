@@ -86,7 +86,7 @@ impl Sandbox {
 struct SandboxCallExternals<'a, 'e: 'a, E: Externalities + 'e> {
 	original_externals: &'a mut FunctionExecutor<'e, E>,
 	original_memory: MemoryRef,
-	sandbox_id: u32,
+	instance_id: u32,
 }
 
 impl<'a, 'e: 'a, E: Externalities + 'e> Externals for SandboxCallExternals<'a, 'e, E> {
@@ -100,11 +100,11 @@ impl<'a, 'e: 'a, E: Externalities + 'e> Externals for SandboxCallExternals<'a, '
 
 		println!("invoke_index({}, args={:?})", index, args);
 
-		let (user_data_offset, func_ref) = {
-			let sandbox = &self.original_externals.sandbox_store.sandboxes[self.sandbox_id as usize];
-			let user_data_offset = sandbox.raw_closures[index].user_data_offset;
-			let func_ref = sandbox.raw_closures[index].func_ref.clone();
-			(user_data_offset, func_ref)
+		let (func_idx, unmarshal_thunk) = {
+			let instance = &self.original_externals.sandbox_store.instances[self.instance_id as usize];
+			let unmarshal_thunk = instance.unmarshal_thunk.clone();
+			let func_idx = instance.funcs[index];
+			(func_idx, unmarshal_thunk)
 		};
 
 		// Marshall arguments into byte vector.
@@ -124,11 +124,11 @@ impl<'a, 'e: 'a, E: Externalities + 'e> Externals for SandboxCallExternals<'a, '
 		self.original_memory.set(invoke_args_ptr, &invoke_args_data).unwrap();
 
 		let mut invoke_args = Vec::new();
-		invoke_args.push(RuntimeValue::I32(user_data_offset as i32));
 		invoke_args.push(RuntimeValue::I32(invoke_args_ptr as i32));
 		invoke_args.push(RuntimeValue::I32(args.len() as i32));
+		invoke_args.push(RuntimeValue::I32(func_idx as i32));
 
-		let result = ::wasmi::FuncInstance::invoke(&func_ref, invoke_args.as_ref(), self.original_externals);
+		let result = ::wasmi::FuncInstance::invoke(&unmarshal_thunk, invoke_args.as_ref(), self.original_externals);
 
 		self.original_externals.heap.deallocate(invoke_args_ptr);
 
@@ -136,20 +136,115 @@ impl<'a, 'e: 'a, E: Externalities + 'e> Externals for SandboxCallExternals<'a, '
 	}
 }
 
-impl ImportResolver for Sandbox {
+struct Unmarshaller<'a> {
+	data: &'a [u8],
+	offset: usize,
+}
+
+impl<'a> Unmarshaller<'a> {
+	fn new(data: &[u8]) -> Unmarshaller {
+		Unmarshaller {
+			data,
+			offset: 0,
+		}
+	}
+
+	fn read(&mut self) -> Result<u8> {
+		// TODO: Error
+		let v = self.data.get(self.offset).unwrap();
+		self.offset += 1;
+		Ok(*v)
+	}
+
+	fn slice(&mut self, len: usize) -> Result<&[u8]> {
+		// TODO: Error
+		let v = &self.data[self.offset..(self.offset + len)];
+		self.offset += len;
+		Ok(v)
+	}
+}
+
+struct SandboxInstance {
+	instance: ModuleRef,
+	unmarshal_thunk: FuncRef,
+	funcs: Vec<usize>,
+}
+
+struct ImportsExternals {
+	funcs: Vec<usize>,
+}
+
+struct ImportTable {
+	func_map: HashMap<(Vec<u8>, Vec<u8>), usize>,
+	memories_map: HashMap<(Vec<u8>, Vec<u8>), MemoryRef>,
+	externals: ImportsExternals
+}
+
+impl ImportTable {
+	fn unmarshal(imports: &[u8], table: &TableRef, memories: &[MemoryRef]) -> ImportTable {
+		println!("imports={:?}", imports);
+		let mut func_map = HashMap::new();
+		let mut memories_map = HashMap::new();
+		let mut externals = ImportsExternals { funcs: Vec::new() };
+
+		let mut u = Unmarshaller::new(imports);
+		let len = u.read().unwrap();
+		for _ in 0..len {
+			let module_len = u.read().unwrap();
+			let module = u.slice(module_len as usize).unwrap().to_owned();
+
+			let field_len = u.read().unwrap();
+			let field = u.slice(field_len as usize).unwrap().to_owned();
+
+			let kind = u.read().unwrap();
+			match kind {
+				0 => {
+					let func_idx = u.read().unwrap();
+
+					// TODO: Remove it or leave it here for the check?
+					let func_ref = table.get(func_idx as u32).unwrap().unwrap();
+
+					let externals_idx = externals.funcs.len();
+					externals.funcs.push(func_idx as usize);
+
+					println!("host_func({}, {})", String::from_utf8_lossy(&module), String::from_utf8_lossy(&field));
+					println!("  externals_idx={}", externals_idx);
+					println!("  original_idx={}", func_idx);
+					func_map.insert((module, field), externals_idx);
+				},
+				1 => {
+					let memory_id = u.read().unwrap();
+					let memory_ref = memories.get(memory_id as usize).unwrap();
+
+					println!("memory({}, {})", String::from_utf8_lossy(&module), String::from_utf8_lossy(&field));
+					memories_map.insert((module, field), memory_ref.clone());
+				},
+				_ => panic!(),
+			}
+		}
+		ImportTable {
+			func_map,
+			memories_map,
+			externals,
+		}
+	}
+
+	fn into_funcs(self) -> Vec<usize> {
+		self.externals.funcs
+	}
+}
+
+impl ImportResolver for ImportTable {
 	fn resolve_func(
 		&self,
 		module_name: &str,
 		field_name: &str,
 		signature: &::wasmi::Signature,
 	) -> ::std::result::Result<FuncRef, ::wasmi::Error> {
-		let key = (module_name.as_bytes().to_vec(), field_name.as_bytes().to_vec());
-		let idx = *self.registered_funcs.get(&key).ok_or_else(||
+		let key = (module_name.as_bytes().to_owned(), field_name.as_bytes().to_owned());
+		let idx = *self.func_map.get(&key).ok_or_else(||
 			::wasmi::Error::Instantiation(format!("Export {}:{} not found", module_name, field_name))
 		)?;
-
-		println!("resolve_func({}, {}) = {}", module_name, field_name, idx);
-
 		Ok(::wasmi::FuncInstance::alloc_host(signature.clone(), idx))
 	}
 
@@ -170,8 +265,8 @@ impl ImportResolver for Sandbox {
 		_memory_type: &::wasmi::MemoryDescriptor,
 	) -> ::std::result::Result<MemoryRef, ::wasmi::Error> {
 		let key = (module_name.as_bytes().to_vec(), field_name.as_bytes().to_vec());
-		let mem = self.registered_memories.get(&key).ok_or_else(||
-			::wasmi::Error::Instantiation(format!("Export {}:{} not found", module_name, field_name))
+		let mem = self.memories_map.get(&key).ok_or_else(||
+		 	::wasmi::Error::Instantiation(format!("Export {}:{} not found", module_name, field_name))
 		)?.clone();
 		Ok(mem)
 	}
@@ -188,23 +283,23 @@ impl ImportResolver for Sandbox {
 }
 
 struct SandboxStore {
-	sandboxes: Vec<Sandbox>,
+	instances: Vec<SandboxInstance>,
 	memories: Vec<MemoryRef>,
 }
 impl SandboxStore {
 	fn new() -> Self {
 		SandboxStore {
-			sandboxes: Vec::new(),
+			instances: Vec::new(),
 			memories: Vec::new(),
 		}
 	}
 
-	fn new_sandbox(&mut self) -> u32 {
-		let sandbox = Sandbox::new();
-		self.sandboxes.push(sandbox);
-		let sandbox_idx = self.sandboxes.len() - 1;
-		sandbox_idx as u32
-	}
+	// fn new_sandbox(&mut self) -> u32 {
+	// 	let sandbox = Sandbox::new();
+	// 	self.sandboxes.push(sandbox);
+	// 	let sandbox_idx = self.sandboxes.len() - 1;
+	// 	sandbox_idx as u32
+	// }
 
 	fn new_memory(&mut self, initial: u32, maximum: Option<u32>) -> u32 {
 		let mem = MemoryInstance::alloc(
@@ -472,28 +567,31 @@ impl_function_executor!(this: FunctionExecutor<'e, E>,
 			5
 		})
 	},
-	ext_sandbox_new() -> u32 => {
-		Ok(this.sandbox_store.new_sandbox())
-	},
-	ext_sandbox_instantiate(sandbox_id: u32, wasm_ptr: *const u8, wasm_len: usize) -> u32 => {
+	ext_sandbox_instantiate(unmarshal_thunk_idx: usize, wasm_ptr: *const u8, wasm_len: usize, imports_ptr: *const u8, imports_len: usize) -> u32 => {
 		let wasm = this.memory.get(wasm_ptr, wasm_len as usize).map_err(|_| DummyUserError)?;
+		let raw_imports = this.memory.get(imports_ptr, imports_len as usize).map_err(|_| DummyUserError)?;
 
-		let sandbox = this.sandbox_store.sandboxes.get_mut(sandbox_id as usize).ok_or_else(|| DummyUserError)?;
+		let import_table = ImportTable::unmarshal(&raw_imports, &this.table, &this.sandbox_store.memories);
 
 		// TODO: Remove unwraps and asserts.
 		let module = Module::from_buffer(wasm).unwrap();
 		let instance = ModuleInstance::new(
 			&module,
-			sandbox
+			&import_table,
 		).unwrap().assert_no_start();
 
-		sandbox.instances.push(instance);
-		let instance_idx = sandbox.instances.len() - 1;
+		let unmarshal_thunk = this.table.get(unmarshal_thunk_idx).unwrap().unwrap();
 
+		let instance_idx = this.sandbox_store.instances.len();
+		this.sandbox_store.instances.push(SandboxInstance {
+			unmarshal_thunk,
+			instance,
+			funcs: import_table.into_funcs(),
+		});
 		Ok(instance_idx as u32)
 	},
-	ext_sandbox_invoke(sandbox_id: u32, instance_id: u32, export_ptr: *const u8, export_len: usize) -> u32 => {
-		println!("ext_sandbox_invoke, sandbox_id={}", sandbox_id);
+	ext_sandbox_invoke(instance_id: u32, export_ptr: *const u8, export_len: usize) -> u32 => {
+		println!("ext_sandbox_invoke, instance_id={}", instance_id);
 		let export = this.memory.get(export_ptr, export_len as usize)
 			.map_err(|_| DummyUserError)
 			.and_then(|b|
@@ -501,72 +599,21 @@ impl_function_executor!(this: FunctionExecutor<'e, E>,
 					.map_err(|_| DummyUserError)
 			)?;
 
-		let instance = {
-			let sandbox = this.sandbox_store.sandboxes.get_mut(sandbox_id as usize).ok_or_else(|| DummyUserError)?;
-			sandbox.instances.get(instance_id as usize).ok_or_else(|| DummyUserError)?.clone()
-		};
+		println!("  export={}", export);
+
+		let instance = this.sandbox_store.instances.get(instance_id as usize).ok_or_else(|| DummyUserError)?.instance.clone();
 
 		let original_memory = this.memory.clone();
 		let mut call_externals = SandboxCallExternals {
 			original_externals: this,
 			original_memory,
-			sandbox_id,
+			instance_id,
 		};
 
 		// TODO: Error handling
 		let _result = instance.invoke_export(&export, &[], &mut call_externals).unwrap();
 
 		Ok(0)
-	},
-	ext_sandbox_register_closure(
-		sandbox_id: u32,
-		module_name_ptr: *const u8,
-		module_name_len: usize,
-		field_name_ptr: *const u8,
-		field_name_len: usize,
-		user_data: *const u8,
-		fn_ptr: u32) =>
-	{
-		let module_name = this.memory.get(module_name_ptr, module_name_len as usize).map_err(|_| DummyUserError)?;
-		let field_name = this.memory.get(field_name_ptr, field_name_len as usize).map_err(|_| DummyUserError)?;
-
-		println!(
-			"ext_sandbox_register_closure, sandbox_id={}, module_name={:?}, field_name={:?}",
-			sandbox_id,
-			String::from_utf8_lossy(&module_name),
-			String::from_utf8_lossy(&field_name),
-		);
-
-		let func_ref = this.table.get(fn_ptr).map_err(|_| DummyUserError)?.ok_or_else(|| DummyUserError)?;
-
-		let sandbox = this.sandbox_store.sandboxes.get_mut(sandbox_id as usize).ok_or_else(|| DummyUserError)?;
-		sandbox.raw_closures.push(RawClosure {
-			user_data_offset: user_data,
-			func_ref,
-		});
-
-		let raw_closure_idx = sandbox.raw_closures.len() - 1;
-		sandbox.registered_funcs.insert((module_name, field_name), raw_closure_idx);
-
-		Ok(())
-	},
-	ext_sandbox_register_memory(
-		sandbox_id: u32,
-		module_name_ptr: *const u8,
-		module_name_len: usize,
-		field_name_ptr: *const u8,
-		field_name_len: usize,
-		memory_id: u32
-	) => {
-		let module_name = this.memory.get(module_name_ptr, module_name_len as usize).map_err(|_| DummyUserError)?;
-		let field_name = this.memory.get(field_name_ptr, field_name_len as usize).map_err(|_| DummyUserError)?;
-
-		let memref = this.sandbox_store.memories.get(memory_id as usize).ok_or_else(|| DummyUserError)?.clone();
-
-		let sandbox = this.sandbox_store.sandboxes.get_mut(sandbox_id as usize).ok_or_else(|| DummyUserError)?;
-		sandbox.registered_memories.insert((module_name, field_name), memref);
-
-		Ok(())
 	},
 	ext_sandbox_memory_new(initial: u32, maximum: u32) -> u32 => {
 		let maximum = if maximum == u32::max_value() {

@@ -487,7 +487,7 @@ mod private {
 		// at the given location will be removed.
 		// - value_ptr: pointer into the linear memory
 		// where the value to set is placed. If `value_non_null` is set to 0, then this parameter is ignored.
-		let ext_set_storage: fn(&[sandbox::Value]) = |args: &[sandbox::Value]| {
+		fn ext_set_storage(args: &[sandbox::Value]) {
 			let location_ptr = args[0].as_i32() as u32;
 			let value_non_null = args[1].as_i32() as u32;
 			let value_ptr = args[2].as_i32() as u32;
@@ -507,7 +507,7 @@ mod private {
 				}
 			});
 			assert!(called);
-		};
+		}
 
 		// ext_get_storage(location_ptr: u32, dest_ptr: u32);
 		//
@@ -517,7 +517,7 @@ mod private {
 		//
 		// - location_ptr: pointer into the linear
 		// memory where the location of the requested value is placed.
-		let ext_get_storage: fn(&[sandbox::Value]) = |args: &[sandbox::Value]| {
+		fn ext_get_storage(args: &[sandbox::Value]) {
 			let location_ptr = args[0].as_i32() as u32;
 			let dest_ptr = args[1].as_i32() as u32;
 
@@ -534,12 +534,15 @@ mod private {
 				}
 			});
 			assert!(called);
-		};
+		}
 
 		// TODO(ser): `value` isn't an u32 but u64. u32 is used because
 		// we not yet support.
 		// ext_transfer(transfer_to: u32, value: u32)
-		let ext_transfer: fn(&[sandbox::Value]) = |args: &[sandbox::Value]| {
+		fn ext_transfer(args: &[sandbox::Value]) {
+			// TODO(ser): Remove
+			print(1600);
+
 			let transfer_to_ptr = args[0].as_i32() as u32;
 			let value = args[1].as_i32() as u64;
 
@@ -556,9 +559,9 @@ mod private {
 			});
 			assert!(called);
 			// TODO(ser): Trap or result.
-		};
+		}
 
-		let ext_create: fn(&[sandbox::Value]) = |args: &[sandbox::Value]| {
+		fn ext_create(args: &[sandbox::Value]) {
 			// ext_create(code_ptr: u32, code_len: u32, value: u32)
 			let code_ptr = args[0].as_i32() as u32;
 			let code_len = args[1].as_i32() as u32;
@@ -579,7 +582,7 @@ mod private {
 			});
 			assert!(called);
 			// TODO(ser): Trap or result.
-		};
+		}
 
 		// TODO: Inspect the binary to extract the initial page count.
 		let memory = sandbox::Memory::new(1, None);

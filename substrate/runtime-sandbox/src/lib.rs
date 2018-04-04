@@ -50,6 +50,8 @@ impl Value {
 	}
 }
 
+// TODO: Define Memory here and use MemoryImp
+
 enum ExternVal {
 	// This could be used for dynamic-linking implementation.
 	// However, FuncRef would be more useful?
