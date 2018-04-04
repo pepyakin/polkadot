@@ -61,31 +61,8 @@ impl Heap {
 	}
 }
 
-struct RawClosure {
-	user_data_offset: u32,
-	func_ref: FuncRef,
-}
-
-struct Sandbox {
-	instances: Vec<ModuleRef>,
-	raw_closures: Vec<RawClosure>,
-	registered_funcs: HashMap<(Vec<u8>, Vec<u8>), usize>,
-	registered_memories: HashMap<(Vec<u8>, Vec<u8>), MemoryRef>,
-
-}
-impl Sandbox {
-	fn new() -> Self {
-		Sandbox {
-			instances: Vec::new(),
-			raw_closures: Vec::new(),
-			registered_funcs: HashMap::new(),
-			registered_memories: HashMap::new(),
-		}
-	}
-}
 struct SandboxCallExternals<'a, 'e: 'a, E: Externalities + 'e> {
 	original_externals: &'a mut FunctionExecutor<'e, E>,
-	original_memory: MemoryRef,
 	instance_id: u32,
 }
 
@@ -121,7 +98,7 @@ impl<'a, 'e: 'a, E: Externalities + 'e> Externals for SandboxCallExternals<'a, '
 
 		// Allocate space for and copy the marshalled arguments into the memory.
 		let invoke_args_ptr = self.original_externals.heap.allocate(invoke_args_data.len() as u32);
-		self.original_memory.set(invoke_args_ptr, &invoke_args_data).unwrap();
+		self.original_externals.memory.set(invoke_args_ptr, &invoke_args_data).unwrap();
 
 		let mut invoke_args = Vec::new();
 		invoke_args.push(RuntimeValue::I32(invoke_args_ptr as i32));
@@ -293,13 +270,6 @@ impl SandboxStore {
 			memories: Vec::new(),
 		}
 	}
-
-	// fn new_sandbox(&mut self) -> u32 {
-	// 	let sandbox = Sandbox::new();
-	// 	self.sandboxes.push(sandbox);
-	// 	let sandbox_idx = self.sandboxes.len() - 1;
-	// 	sandbox_idx as u32
-	// }
 
 	fn new_memory(&mut self, initial: u32, maximum: Option<u32>) -> u32 {
 		let mem = MemoryInstance::alloc(
@@ -603,10 +573,8 @@ impl_function_executor!(this: FunctionExecutor<'e, E>,
 
 		let instance = this.sandbox_store.instances.get(instance_id as usize).ok_or_else(|| DummyUserError)?.instance.clone();
 
-		let original_memory = this.memory.clone();
 		let mut call_externals = SandboxCallExternals {
 			original_externals: this,
-			original_memory,
 			instance_id,
 		};
 
