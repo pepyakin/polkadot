@@ -54,6 +54,7 @@ pub mod wasm_utils;
 mod wasm_executor;
 #[macro_use]
 mod native_executor;
+mod sandbox;
 
 pub mod error;
 pub use wasm_executor::WasmExecutor;
