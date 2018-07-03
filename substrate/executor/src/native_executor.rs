@@ -67,13 +67,14 @@ impl<D: NativeExecutionDispatch + Sync + Send> CodeExecutor for NativeExecutor<D
 		method: &str,
 		data: &[u8],
 	) -> Result<Vec<u8>> {
-		if code == D::native_equivalent() {
-			// call native
-			D::dispatch(ext, method, data)
-		} else {
-			// call into wasm.
-			WasmExecutor.call(ext, code, method, data)
-		}
+		// if code == D::native_equivalent() {
+		// 	// call native
+		// 	D::dispatch(ext, method, data)
+		// } else {
+		// 	// call into wasm.
+		// 	WasmExecutor.call(ext, code, method, data)
+		// }
+		WasmExecutor.call(ext, code, method, data)
 	}
 }
 
