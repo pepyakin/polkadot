@@ -105,8 +105,8 @@ fn to_runtime_value(v: TypedValue) -> RuntimeValue {
 	match v {
 		TypedValue::I32(v) => RuntimeValue::I32(v as i32),
 		TypedValue::I64(v) => RuntimeValue::I64(v as i64),
-		TypedValue::F32(v_bits) => RuntimeValue::F32(f32::from_bits(v_bits as u32)),
-		TypedValue::F64(v_bits) => RuntimeValue::F64(f64::from_bits(v_bits as u64)),
+		TypedValue::F32(v_bits) => RuntimeValue::F32(panic!()),
+		TypedValue::F64(v_bits) => RuntimeValue::F64(panic!()),
 	}
 }
 
