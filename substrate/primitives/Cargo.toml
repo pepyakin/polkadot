@@ -15,7 +15,7 @@ uint = { git = "https://github.com/rphmeier/primitives.git", branch = "compile-f
 twox-hash = { version = "1.1.0", optional = true }
 byteorder = { version = "1.1", default_features = false }
 blake2-rfc = { version = "0.2.18", optional = true }
-wasmi = { path = "/Users/pepyakin/dev/parity/wasmi", optional = true }
+wasmi = { git = "https://github.com/paritytech/wasmi.git", rev = "b7fff032645086fe09bca3ed4b22e1450450ff62", optional = true }
 
 [dev-dependencies]
 substrate-serializer = { path = "../serializer" }
